@@ -1,7 +1,3 @@
-# ============================================================
-# CLIENTE DE BINANCE - EXPLOSION BOT
-# ============================================================
-
 import pandas as pd
 import numpy as np
 from binance.client import Client
@@ -9,6 +5,7 @@ from binance.exceptions import BinanceAPIException
 import sys
 import os
 import time
+import requests  # ← NUEVO IMPORT para probar proxies
 from datetime import datetime, timedelta
 
 # Agregar raíz del proyecto al path
@@ -21,6 +18,37 @@ from config.settings import (
     TIMEFRAME
 )
 
+# ============================================================
+# 🔥 CONFIGURACIÓN DE PROXIES (AGREGADO)
+# ============================================================
+PROXY_LIST = [
+    {'http': 'http://212.113.104.29:10801', 'https': 'https://212.113.104.29:10801'},
+    {'http': 'http://103.43.191.71:8888', 'https': 'https://103.43.191.71:8888'},
+    {'http': 'http://34.84.162.206:38080', 'https': 'https://34.84.162.206:38080'},
+    {'http': 'http://146.59.16.47:8888', 'https': 'https://146.59.16.47:8888'},
+    {'http': 'http://8.219.97.248:80', 'https': 'https://8.219.97.248:80'},
+    {'http': 'http://178.156.206.253:8118', 'https': 'https://178.156.206.253:8118'},
+]
+
+def find_working_proxy():
+    """Encuentra automáticamente un proxy funcional"""
+    for proxy in PROXY_LIST:
+        try:
+            print(f"🔍 Probando proxy: {proxy['http']}")
+            response = requests.get(
+                'https://api.binance.com/api/v3/ping',
+                proxies=proxy,
+                timeout=10
+            )
+            if response.status_code == 200:
+                print(f"✅ Proxy FUNCIONA: {proxy['http']}")
+                return proxy
+        except:
+            print(f"❌ Proxy falló: {proxy['http']}")
+            continue
+    print("❌ Ningún proxy funcionó, usando conexión directa")
+    return None
+
 class BinanceClient:
     """Cliente para interactuar con la API de Binance"""
     
@@ -31,24 +59,51 @@ class BinanceClient:
     def conectar(self):
         """Establece conexión con Binance"""
         try:
+            # 🔥 BUSCAR PROXY FUNCIONAL
+            proxy = find_working_proxy()
+            
             if BINANCE_TESTNET:
                 # Usar Testnet
-                self.client = Client(
-                    BINANCE_API_KEY,
-                    BINANCE_SECRET_KEY,
-                    testnet=True
-                )
-                print("✅ Conectado a Binance Testnet")
+                if proxy:
+                    self.client = Client(
+                        BINANCE_API_KEY,
+                        BINANCE_SECRET_KEY,
+                        testnet=True,
+                        requests_params={
+                            'proxies': proxy,
+                            'timeout': 30
+                        }
+                    )
+                    print("✅ Conectado a Binance Testnet con proxy")
+                else:
+                    self.client = Client(
+                        BINANCE_API_KEY,
+                        BINANCE_SECRET_KEY,
+                        testnet=True
+                    )
+                    print("✅ Conectado a Binance Testnet (sin proxy)")
             else:
                 # Usar Mainnet (REAL)
-                self.client = Client(
-                    BINANCE_API_KEY,
-                    BINANCE_SECRET_KEY
-                )
-                print("⚠️ Conectado a Binance MAINNET (¡CUIDADO!)")
+                if proxy:
+                    self.client = Client(
+                        BINANCE_API_KEY,
+                        BINANCE_SECRET_KEY,
+                        requests_params={
+                            'proxies': proxy,
+                            'timeout': 30
+                        }
+                    )
+                    print("⚠️ Conectado a Binance MAINNET con proxy (¡CUIDADO!)")
+                else:
+                    self.client = Client(
+                        BINANCE_API_KEY,
+                        BINANCE_SECRET_KEY
+                    )
+                    print("⚠️ Conectado a Binance MAINNET sin proxy (¡CUIDADO!)")
             
             # Verificar conexión
             self.client.ping()
+            print("✅ Conexión verificada exitosamente")
             return True
             
         except Exception as e:

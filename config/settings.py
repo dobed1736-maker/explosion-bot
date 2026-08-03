@@ -1,18 +1,42 @@
 # ============================================================
 # CONFIGURACIÓN DEL BOT - EXPLOSION BOT
 # ============================================================
-
+# config/settings.py - VERSIÓN MODIFICADA
+from binance.client import Client
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
+API_KEY = os.getenv('BINANCE_API_KEY')
+API_SECRET = os.getenv('BINANCE_API_SECRET')
+
 # ============================================================
-# BINANCE
+# 🔥 AGREGAS ESTO PARA EL PROXY
 # ============================================================
-BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
-BINANCE_SECRET_KEY = os.getenv('BINANCE_SECRET_KEY')
-BINANCE_TESTNET = True  # Siempre en Testnet para pruebas
+# Configuración del proxy (usa uno de la lista)
+PROXY_CONFIG = {
+    'http': 'http://212.113.104.29:10801',   # Alemania
+    'https': 'https://212.113.104.29:10801'
+}
+
+# ============================================================
+# 🔥 MODIFICAS EL CLIENTE
+# ============================================================
+# ANTES:
+# client = Client(API_KEY, API_SECRET)
+
+# DESPUÉS:
+client = Client(
+    API_KEY, 
+    API_SECRET,
+    requests_params={
+        'proxies': PROXY_CONFIG,
+        'timeout': 30  # Para que no se cuelgue
+    }
+)
+
+print("✅ Cliente Binance inicializado con proxy")
 
 # ============================================================
 # MONEDAS Y ESCANEO
