@@ -15,10 +15,7 @@ API_SECRET = os.getenv('BINANCE_API_SECRET')
 # 🔥 AGREGAS ESTO PARA EL PROXY
 # ============================================================
 # Configuración del proxy (usa uno de la lista)
-PROXY_CONFIG = {
-    'http': 'http://103.43.191.71:8888',   # Indonesia (suele ser más estable)
-    'https': 'https://103.43.191.71:8888'
-}
+PROXY_CONFIG = None   # <--- Así desactivas el proxy
 
 # ============================================================
 # 🔥 MODIFICAS EL CLIENTE
