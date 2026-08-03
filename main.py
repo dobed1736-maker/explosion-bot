@@ -246,8 +246,9 @@ class ExplosionBot:
                 print(f"❌ Error en ejecución: {e}")
                 log_error("Error en ejecución", e)
                 time.sleep(30)
-
-
+            print("🔄 Bot vivo - escaneando mercado...") 
+             
+             
 if __name__ == "__main__":
     # Crear carpetas necesarias
     os.makedirs("data/raw", exist_ok=True)
