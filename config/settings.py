@@ -16,8 +16,8 @@ API_SECRET = os.getenv('BINANCE_API_SECRET')
 # ============================================================
 # Configuración del proxy (usa uno de la lista)
 PROXY_CONFIG = {
-    'http': 'http://212.113.104.29:10801',   # Alemania
-    'https': 'https://212.113.104.29:10801'
+    'http': 'http://103.43.191.71:8888',   # Indonesia (suele ser más estable)
+    'https': 'https://103.43.191.71:8888'
 }
 
 # ============================================================
