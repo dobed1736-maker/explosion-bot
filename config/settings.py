@@ -11,10 +11,7 @@ load_dotenv()
 API_KEY = os.getenv('BINANCE_API_KEY')
 API_SECRET = os.getenv('BINANCE_API_SECRET')
 
-# ============================================================
-# 🔥 AGREGAS ESTO PARA EL PROXY
-# ============================================================
-# Configuración del proxy (usa uno de la lista)
+
 PROXY_CONFIG = None   # <--- Así desactivas el proxy
 
 # ============================================================
