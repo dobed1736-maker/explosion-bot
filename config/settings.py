@@ -10,27 +10,32 @@ load_dotenv()
 
 API_KEY = os.getenv('BINANCE_API_KEY')
 API_SECRET = os.getenv('BINANCE_API_SECRET')
+load_dotenv()
 
-
-PROXY_CONFIG = None   # <--- Así desactivas el proxy
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
+BINANCE_SECRET_KEY = os.getenv('BINANCE_SECRET_KEY')
+BINANCE_TESTNET = os.getenv('BINANCE_TESTNET', 'False').lower() in ('true', '1', 't')
 
 # ============================================================
-# 🔥 MODIFICAS EL CLIENTE
+# 🔥 CONFIGURACIÓN DE PROXY DESDE .ENV
 # ============================================================
-# ANTES:
-# client = Client(API_KEY, API_SECRET)
+PROXY_USER = os.getenv('PROXY_USER')
+PROXY_PASS = os.getenv('PROXY_PASS')
+PROXY_IP = os.getenv('PROXY_IP')
+PROXY_PORT = os.getenv('PROXY_PORT')
 
-# DESPUÉS:
-client = Client(
-    API_KEY, 
-    API_SECRET,
-    requests_params={
-        'proxies': PROXY_CONFIG,
-        'timeout': 30  # Para que no se cuelgue
+if PROXY_IP and PROXY_PORT:
+    if PROXY_USER and PROXY_PASS:
+        PROXY_URL = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_IP}:{PROXY_PORT}"
+    else:
+        PROXY_URL = f"http://{PROXY_IP}:{PROXY_PORT}"
+        
+    PROXY_CONFIG = {
+        'http': PROXY_URL,
+        'https': PROXY_URL
     }
-)
-
-print("✅ Cliente Binance inicializado con proxy")
+else:
+    PROXY_CONFIG = None
 
 # ============================================================
 # MONEDAS Y ESCANEO

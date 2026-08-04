@@ -5,7 +5,6 @@ from binance.exceptions import BinanceAPIException
 import sys
 import os
 import time
-import requests  # ← NUEVO IMPORT para probar proxies
 from datetime import datetime, timedelta
 
 # Agregar raíz del proyecto al path
@@ -15,39 +14,9 @@ from config.settings import (
     BINANCE_API_KEY,
     BINANCE_SECRET_KEY,
     BINANCE_TESTNET,
-    TIMEFRAME
+    TIMEFRAME,
+    PROXY_CONFIG  # ← Leemos el proxy configurado en settings.py
 )
-
-# ============================================================
-# 🔥 CONFIGURACIÓN DE PROXIES (AGREGADO)
-# ============================================================
-PROXY_LIST = [
-    {'http': 'http://212.113.104.29:10801', 'https': 'https://212.113.104.29:10801'},
-    {'http': 'http://103.43.191.71:8888', 'https': 'https://103.43.191.71:8888'},
-    {'http': 'http://34.84.162.206:38080', 'https': 'https://34.84.162.206:38080'},
-    {'http': 'http://146.59.16.47:8888', 'https': 'https://146.59.16.47:8888'},
-    {'http': 'http://8.219.97.248:80', 'https': 'https://8.219.97.248:80'},
-    {'http': 'http://178.156.206.253:8118', 'https': 'https://178.156.206.253:8118'},
-]
-
-def find_working_proxy():
-    """Encuentra automáticamente un proxy funcional"""
-    for proxy in PROXY_LIST:
-        try:
-            print(f"🔍 Probando proxy: {proxy['http']}")
-            response = requests.get(
-                'https://api.binance.com/api/v3/ping',
-                proxies=proxy,
-                timeout=10
-            )
-            if response.status_code == 200:
-                print(f"✅ Proxy FUNCIONA: {proxy['http']}")
-                return proxy
-        except:
-            print(f"❌ Proxy falló: {proxy['http']}")
-            continue
-    print("❌ Ningún proxy funcionó, usando conexión directa")
-    return None
 
 class BinanceClient:
     """Cliente para interactuar con la API de Binance"""
@@ -57,53 +26,34 @@ class BinanceClient:
         self.conectar()
     
     def conectar(self):
-        """Establece conexión con Binance"""
+        """Establece conexión con Binance usando el Proxy residencial/ISP"""
         try:
-            # 🔥 BUSCAR PROXY FUNCIONAL
-            proxy = find_working_proxy()
+            req_params = {'timeout': 30}
             
+            # Solo pasamos el proxy si realmente está configurado en .env
+            if PROXY_CONFIG:
+                req_params['proxies'] = PROXY_CONFIG
+                print("🛡️ Usando Proxy para Binance desde Webshare...")
+
             if BINANCE_TESTNET:
-                # Usar Testnet
-                if proxy:
-                    self.client = Client(
-                        BINANCE_API_KEY,
-                        BINANCE_SECRET_KEY,
-                        testnet=True,
-                        requests_params={
-                            'proxies': proxy,
-                            'timeout': 30
-                        }
-                    )
-                    print("✅ Conectado a Binance Testnet con proxy")
-                else:
-                    self.client = Client(
-                        BINANCE_API_KEY,
-                        BINANCE_SECRET_KEY,
-                        testnet=True
-                    )
-                    print("✅ Conectado a Binance Testnet (sin proxy)")
+                self.client = Client(
+                    BINANCE_API_KEY,
+                    BINANCE_SECRET_KEY,
+                    testnet=True,
+                    requests_params=req_params
+                )
+                print("✅ Conectado a Binance Testnet")
             else:
-                # Usar Mainnet (REAL)
-                if proxy:
-                    self.client = Client(
-                        BINANCE_API_KEY,
-                        BINANCE_SECRET_KEY,
-                        requests_params={
-                            'proxies': proxy,
-                            'timeout': 30
-                        }
-                    )
-                    print("⚠️ Conectado a Binance MAINNET con proxy (¡CUIDADO!)")
-                else:
-                    self.client = Client(
-                        BINANCE_API_KEY,
-                        BINANCE_SECRET_KEY
-                    )
-                    print("⚠️ Conectado a Binance MAINNET sin proxy (¡CUIDADO!)")
+                self.client = Client(
+                    BINANCE_API_KEY,
+                    BINANCE_SECRET_KEY,
+                    requests_params=req_params
+                )
+                print("⚠️ Conectado a Binance MAINNET (FUTUROS)")
             
-            # Verificar conexión
+            # Verificar conexión con Binance
             self.client.ping()
-            print("✅ Conexión verificada exitosamente")
+            print("✅ Conexión verificada exitosamente con Binance")
             return True
             
         except Exception as e:
@@ -113,14 +63,6 @@ class BinanceClient:
     def obtener_velas(self, symbol, intervalo=TIMEFRAME, limit=500):
         """
         Obtiene velas históricas de Binance
-        
-        Args:
-            symbol (str): Par de trading (ej. 'KOMAUSDT')
-            intervalo (str): '1m', '5m', '15m', '1h', '4h', '1d'
-            limit (int): Número de velas (máx 1000)
-        
-        Returns:
-            pd.DataFrame: Datos de velas
         """
         try:
             if self.client is None:
@@ -167,12 +109,6 @@ class BinanceClient:
         """
         Obtiene las monedas que más están subiendo en las últimas 24h
         en FUTUROS de Binance
-        
-        Args:
-            limit (int): Número de ganadores a retornar
-        
-        Returns:
-            list: Lista de diccionarios con {symbol, cambio, volumen, precio}
         """
         try:
             if self.client is None:
@@ -197,8 +133,7 @@ class BinanceClient:
                     volumen = float(t['quoteVolume'])
                     precio = float(t['lastPrice'])
                     
-                    # Solo monedas con volumen significativo
-                    if volumen > 100000:  # $100k mínimo (lo filtraremos después más estricto)
+                    if volumen > 100000:  # $100k mínimo
                         ganadores.append({
                             'symbol': symbol,
                             'cambio': cambio,
@@ -222,13 +157,6 @@ class BinanceClient:
     def obtener_order_book(self, symbol, limit=20):
         """
         Obtiene el order book (profundidad) de una moneda
-        
-        Args:
-            symbol (str): Par de trading
-            limit (int): Profundidad a obtener
-        
-        Returns:
-            dict: {bids: [[price, qty], ...], asks: [[price, qty], ...]}
         """
         try:
             if self.client is None:
@@ -263,7 +191,7 @@ class BinanceClient:
             funding = self.client.futures_funding_rate(symbol=symbol, limit=1)
             
             if funding and len(funding) > 0:
-                return float(funding[0]['fundingRate']) * 100  # Convertir a %
+                return float(funding[0]['fundingRate']) * 100
             return 0
             
         except Exception as e:
@@ -294,22 +222,18 @@ def get_client():
     return _cliente
 
 def obtener_datos(symbol, intervalo=TIMEFRAME, limit=500):
-    """Función rápida para obtener datos"""
     client = get_client()
     return client.obtener_velas(symbol, intervalo, limit)
 
 def obtener_ganadores(limit=50):
-    """Función rápida para obtener ganadores"""
     client = get_client()
     return client.obtener_top_ganadores(limit)
 
 def obtener_order_book(symbol, limit=20):
-    """Función rápida para obtener order book"""
     client = get_client()
     return client.obtener_order_book(symbol, limit)
 
 def obtener_funding_rate(symbol):
-    """Función rápida para obtener funding rate"""
     client = get_client()
     return client.obtener_funding_rate(symbol)
 
@@ -320,29 +244,29 @@ def obtener_funding_rate(symbol):
 
 if __name__ == "__main__":
     print("="*50)
-    print("🧪 Probando conexión a Binance")
+    print("🧪 Probando conexión a Binance con Proxy")
     print("="*50)
     
     client = BinanceClient()
     
     # 1. Probar obtener datos de BTC
     print("\n📊 Probando obtener velas...")
-    df = client.obtener_velas('BTCUSDT', '5m', 100)
+    df = client.obtener_velas('BTCUSDT', '5m', 10)
     
     if not df.empty:
-        print(f"✅ Datos obtenidos: {len(df)} velas")
+        print(f"✅ Datos obtenidos exitosamente: {len(df)} velas")
         print(df[['timestamp', 'close', 'volume']].tail(3))
     else:
         print("❌ No se pudieron obtener datos")
     
     # 2. Probar obtener ganadores
     print("\n🏆 Probando obtener top ganadores...")
-    ganadores = client.obtener_top_ganadores(10)
+    ganadores = client.obtener_top_ganadores(5)
     
     if ganadores:
-        print(f"✅ Top 10 ganadores:")
-        for i, g in enumerate(ganadores[:5], 1):
-            print(f"   {i}. {g['symbol']}: {g['cambio']:+.2f}% (Vol: ${g['volumen']:,.0f})")
+        print(f"✅ Top ganadores de Futuros:")
+        for i, g in enumerate(ganadores, 1):
+            print(f"   {i}. {g['symbol']}: {g['cambio']:+.2f}%")
     else:
         print("❌ No se obtuvieron ganadores")
     
