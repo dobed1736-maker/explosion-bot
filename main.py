@@ -8,7 +8,7 @@ import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from src.utils.database import inicializar_db, guardar_senal
+
 # Agregar raíz al path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -38,6 +38,7 @@ from src.signals.risk_manager import RiskManager
 from src.utils.logger import log_error, log_senal
 from src.utils.excel_exporter import exportar_a_excel
 from src.utils.telegram_bot import enviar_telegram
+from src.utils.database import inicializar_db, guardar_senal
 
 
 class ExplosionBot:
@@ -98,7 +99,7 @@ class ExplosionBot:
             print(f"   ❌ Error obteniendo datos de {symbol}: {e}")
             return None
     
-   def analizar_moneda(self, symbol, ganador_info):
+    def analizar_moneda(self, symbol, ganador_info):
         """
         Analiza una moneda y devuelve señal si corresponde
         """
@@ -174,7 +175,7 @@ class ExplosionBot:
         
         return senal
     
-def _formatear_mensaje(self, senal, filtros):
+    def _formatear_mensaje(self, senal, filtros):
         """
         Formatea un mensaje para Telegram
         """
@@ -262,9 +263,9 @@ def _formatear_mensaje(self, senal, filtros):
                 print(f"❌ Error en ejecución: {e}")
                 log_error("Error en ejecución", e)
                 time.sleep(30)
-            print("🔄 Bot vivo - escaneando mercado...") 
-             
-             
+            print("🔄 Bot vivo - escaneando mercado...")
+
+
 if __name__ == "__main__":
     # Crear carpetas necesarias
     os.makedirs("data/raw", exist_ok=True)
@@ -272,7 +273,9 @@ if __name__ == "__main__":
     os.makedirs("models/xgboost", exist_ok=True)
     os.makedirs("models/lstm", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
+    
+    # 🗄️ Inicializar la base de datos en PostgreSQL
     inicializar_db()
-
+    
     bot = ExplosionBot()
     bot.ejecutar()
