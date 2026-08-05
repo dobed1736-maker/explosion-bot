@@ -91,3 +91,8 @@ TP2_ATR = 4.5
 TP3_ATR = 7.0
 
 # Porcentajes de cierre en cada TP
+# ============================================================
+# EJECUCIÓN
+# ============================================================
+INTERVALO_EJECUCION = 300        # 5 minutos (en segundos)
+INTERVALO_ESCANEO = 300          # Por si main.py la busca con este nombre
