@@ -8,7 +8,7 @@ import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
-
+from src.utils.database import inicializar_db, guardar_senal
 # Agregar raíz al path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -98,7 +98,7 @@ class ExplosionBot:
             print(f"   ❌ Error obteniendo datos de {symbol}: {e}")
             return None
     
-    def analizar_moneda(self, symbol, ganador_info):
+   def analizar_moneda(self, symbol, ganador_info):
         """
         Analiza una moneda y devuelve señal si corresponde
         """
@@ -146,19 +146,35 @@ class ExplosionBot:
             print(f"\n⏸️ {senal['razon']}")
             return None
         
-        # 9. Guardar señal
+        # 9. Guardar señal en Logs
         log_senal(symbol, "COMPRA", senal['probabilidad'], senal['precio_entrada'])
         
-        # 10. Enviar a Telegram
+        # 🗄️ 10. Guardar en PostgreSQL
+        try:
+            guardar_senal(
+                symbol=symbol,
+                precio=senal['precio_entrada'],
+                score=senal['probabilidad'],
+                prob_xgb=senal.get('prob_xgb', 0.0),
+                prob_lstm=senal.get('prob_lstm', 0.0),
+                prob_stats=senal.get('prob_statsmodels', 0.0),
+                sl=senal['stop_loss'],
+                tp1=senal['take_profit_1'],
+                tp2=senal['take_profit_2']
+            )
+        except Exception as e:
+            print(f"⚠️ No se pudo guardar en la BD: {e}")
+        
+        # 11. Enviar a Telegram
         mensaje = self._formatear_mensaje(senal, resultado_filtros)
         enviar_telegram(mensaje)
         
-        # 11. Exportar a Excel
+        # 12. Exportar a Excel
         exportar_a_excel(senal, resultado_filtros)
         
         return senal
     
-    def _formatear_mensaje(self, senal, filtros):
+def _formatear_mensaje(self, senal, filtros):
         """
         Formatea un mensaje para Telegram
         """
@@ -256,6 +272,7 @@ if __name__ == "__main__":
     os.makedirs("models/xgboost", exist_ok=True)
     os.makedirs("models/lstm", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
-    
+    inicializar_db()
+
     bot = ExplosionBot()
     bot.ejecutar()
