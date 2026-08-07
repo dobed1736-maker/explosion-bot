@@ -79,7 +79,7 @@ HORARIO_FIN = 23                 # 24/7 (fin)
 PESO_XGBOOST = 0.20
 PESO_LSTM = 0.50
 PESO_STATSMODELS = 0.30
-UMBRAL_COMPRA = 0.55         # Bajamos de 0.70 a 0.55 para aprobar las señales          # 65% de confianza para comprar
+UMBRAL_COMPRA = 0.60         # Bajamos de 0.70 a 0.55 para aprobar las señales          # 65% de confianza para comprar
 
 # ============================================================
 # GESTIÓN DE RIESGO Y TAKE PROFIT
