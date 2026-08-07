@@ -108,24 +108,37 @@ class BinanceClient:
     def obtener_top_ganadores(self, limit=50):
         """
         Obtiene las monedas que más están subiendo en las últimas 24h
-        en FUTUROS de Binance
+        en FUTUROS de Binance (Únicamente Contratos Perpetuos Activos)
         """
         try:
             if self.client is None:
                 self.conectar()
             
+            # Obtener información oficial de contratos de FUTUROS activos
+            exchange_info = self.client.futures_exchange_info()
+            # Crear set con únicamente los símbolos que son contratos PERPETUAL y están TRADING
+            simbolos_perpetuos = {
+                s['symbol'] for s in exchange_info['symbols']
+                if s['contractType'] == 'PERPETUAL' and s['status'] == 'TRADING'
+            }
+
             # Obtener tickers de FUTUROS
             tickers = self.client.futures_ticker()
             
             ganadores = []
             for t in tickers:
                 symbol = t['symbol']
-                # Solo monedas que terminan en USDT
+                
+                # 1. Filtro estricto: Debe ser un contrato Perpetuo activo en Binance Futuros
+                if symbol not in simbolos_perpetuos:
+                    continue
+
+                # 2. Solo pares contra USDT
                 if not symbol.endswith('USDT'):
                     continue
                 
-                # Evitar pares raros (ej. USDC, BUSD)
-                if 'USDC' in symbol or 'BUSD' in symbol:
+                # 3. Evitar pares raros o stablecoins
+                if 'USDC' in symbol or 'BUSD' in symbol or 'USDT' in symbol[:-4]:
                     continue
                 
                 try:
@@ -133,7 +146,7 @@ class BinanceClient:
                     volumen = float(t['quoteVolume'])
                     precio = float(t['lastPrice'])
                     
-                    if volumen > 100000:  # $100k mínimo
+                    if volumen > 100000:  # $100k mínimo de volumen en 24h
                         ganadores.append({
                             'symbol': symbol,
                             'cambio': cambio,
