@@ -1,7 +1,14 @@
 import os
 import psycopg2
+import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
+from psycopg2.extensions import register_adapter, AsIs
+
+# Adaptadores para que psycopg2 reconozca los tipos numéricos de NumPy/Pandas
+register_adapter(np.float32, AsIs)
+register_adapter(np.float64, AsIs)
+register_adapter(np.int64, AsIs)
 
 load_dotenv()
 
@@ -63,7 +70,16 @@ def guardar_senal(symbol, precio, score, prob_xgb, prob_lstm, prob_stats, sl, tp
             (fecha, symbol, precio_entrada, score_total, prob_xgboost, prob_lstm, prob_statsmodels, stop_loss, take_profit_1, take_profit_2)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            datetime.now(), symbol, precio, score, prob_xgb, prob_lstm, prob_stats, sl, tp1, tp2
+            datetime.now(), 
+            str(symbol), 
+            float(precio), 
+            float(score), 
+            float(prob_xgb), 
+            float(prob_lstm), 
+            float(prob_stats), 
+            float(sl), 
+            float(tp1), 
+            float(tp2)
         ))
         conn.commit()
         cursor.close()
