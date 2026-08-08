@@ -54,10 +54,10 @@ class ExplosionBot:
         # 1. Cargar modelos de Machine Learning
         print("\n🧠 Cargando modelos de Inteligencia Artificial...")
         self.modelo_xgb = ModeloXGBoost()
-        self.modelo_xgb.cargar_modelo()
+        self.modelo_xgb.cargar()
         
         self.modelo_lstm = ModeloLSTM()
-        self.modelo_lstm.cargar_modelo()
+        self.modelo_lstm.cargar()
         
         self.modelo_regimen = ModeloRegimen()
         
