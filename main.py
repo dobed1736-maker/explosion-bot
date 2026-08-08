@@ -62,7 +62,7 @@ class ExplosionBot:
         self.modelo_regimen = ModeloRegimen()
         
         # 2. Inicializar generadores y gestores
-        self.generador_senales = GeneradorSenales(
+        self.generador = GeneradorSenales(
             modelo_xgb=self.modelo_xgb,
             modelo_lstm=self.modelo_lstm,
             modelo_regimen=self.modelo_regimen
@@ -85,19 +85,19 @@ class ExplosionBot:
             # 2. Calcular indicadores
             df = calcular_todos_indicadores(df)
             
-            # 3. Aplicar los 14 Filtros cuantitativos
+            # 3. Aplicar los filtros cuantitativos
             pasa_filtros, detalles_filtros = aplicar_todos_los_filtros(df)
             if not pasa_filtros:
                 return None
                 
             # 4. Generar señal y score de ML
-            senal = self.generador_senales.generar_senal(df, symbol)
-            if not senal or senal.get('score_total', 0) < UMBRAL_COMPRA:
+            precio_actual = info_ganador.get('precio', df['close'].iloc[-1])
+            senal = self.generador.generar_senal(df, symbol, precio_actual)
+            
+            if not senal or not senal.get('comprar', False) or senal.get('probabilidad', 0) < UMBRAL_COMPRA:
                 return None
                 
-            # 5. Pasar por Gestión de Riesgo (Calcula SL y TPs)
-            senal_con_riesgo = self.risk_manager.calcular_parametros_riesgo(df, senal)
-            return senal_con_riesgo
+            return senal
             
         except Exception as e:
             log_error(f"Error analizando {symbol}", e)
@@ -119,14 +119,15 @@ class ExplosionBot:
             if senal:
                 senales.append(senal)
                 
-                # A. Guardar en Logs / Excel
-                log_senal(senal)
+                # A. Guardar en Logs
+                log_senal(g['symbol'], "COMPRA", senal['probabilidad'], senal['precio_entrada'])
                 
                 # B. Enviar Alerta a Telegram
-                enviar_telegram(senal)
+                msg = f"🚀 SEÑAL EN {senal['symbol']}\nProbabilidad: {senal['probabilidad']:.2%}\nPrecio Entrada: ${senal['precio_entrada']:.4f}"
+                enviar_telegram(msg)
                 
-                # C. 🚀 EJECUTAR AUTOMÁTICAMENTE EN TESTNET DE BINANCE FUTUROS
-                print(f"🔥 Disparando orden en Testnet para {senal['symbol']} (Score: {senal['score_total']:.2%})")
+                # C. 🔥 EJECUTAR AUTOMÁTICAMENTE EN TESTNET
+                print(f"🔥 Disparando orden en Testnet para {senal['symbol']} (Probabilidad: {senal['probabilidad']:.2%})")
                 self.order_manager.ejecutar_orden_compra(
                     symbol=senal['symbol'],
                     precio_entrada=senal['precio_entrada'],
@@ -162,7 +163,6 @@ class ExplosionBot:
 
 
 if __name__ == "__main__":
-    # Crear carpetas necesarias por seguridad
     os.makedirs("data/raw", exist_ok=True)
     os.makedirs("data/processed", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
