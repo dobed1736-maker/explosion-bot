@@ -121,7 +121,7 @@ class ExplosionBot:
         
         senales = []
         for g in candidatos:
-            time.sleep(0.5)  # 👈 AGREGAR ESTA LÍNEA AQUÍ (Evita el error -1003 Too Many Requests)
+            time.sleep(1)  # 👈 AGREGAR ESTA LÍNEA AQUÍ (Evita el error -1003 Too Many Requests)
             
             senal = self.analizar_moneda(g['symbol'], g)
             if senal:
