@@ -78,12 +78,19 @@ class BinanceDynamicWSClient:
                 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
             ])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
-            return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+            
+            # Convertir columnas numéricas necesarias
+            columnas_num = [
+                'open', 'high', 'low', 'close', 'volume',
+                'quote_asset_volume', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume'
+            ]
+            df[columnas_num] = df[columnas_num].astype(float)
+            
+            return df
         except Exception as e:
             print(f"❌ Error cargando historial de {symbol}: {e}")
             return pd.DataFrame()
-
+        
     def _procesar_mensaje_kline(self, msg):
         if msg.get('e') == 'kline':
             kline = msg['k']

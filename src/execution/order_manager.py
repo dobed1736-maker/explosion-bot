@@ -9,7 +9,7 @@ import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.data.binance_client import get_client
+from src.data.binance_client import get_client_ws
 from config.settings import BINANCE_TESTNET
 from binance.exceptions import BinanceAPIException
 
@@ -18,8 +18,9 @@ class OrderManager:
     """Maneja la apertura y cierre de órdenes en Binance Futuros"""
 
     def __init__(self):
-        self.client_wrapper = get_client()
-        self.client = self.client_wrapper.client
+        self.client_wrapper = get_client_ws()
+        # Apuntamos a 'client_rest' que es el cliente REST interno del wrapper
+        self.client = getattr(self.client_wrapper, 'client_rest', getattr(self.client_wrapper, 'client', None))
 
     def ejecutar_orden_compra(self, symbol, precio_entrada, stop_loss, take_profit, margen_usdt=20, apalancamiento=5):
         """

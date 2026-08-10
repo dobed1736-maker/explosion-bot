@@ -1,0 +1,6 @@
+timestamp,mensaje,error
+2026-08-10 09:17:37.685894,Error en ejecución,'taker_buy_base_asset_volume'
+2026-08-10 09:19:48.601642,Error en ejecución,cannot unpack non-iterable GeneradorSenales object
+2026-08-10 09:23:14.607810,Error en ejecución,GeneradorSenales.generar_senal() missing 1 required positional argument: 'precio_actual'
+2026-08-10 09:25:25.548073,Error en ejecución,too many values to unpack (expected 2)
+2026-08-10 09:59:10.444199,Error en ejecución,GeneradorSenales.generar_senal() got an unexpected keyword argument 'symbol'

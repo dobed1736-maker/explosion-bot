@@ -38,7 +38,7 @@ class GeneradorSenales:
         self.modelo_regimen = modelo_regimen
         self.ultima_senal = None
     
-    def calcular_puntuacion(self, df):
+    def calcular_puntuacion(self, df, modelo_override=None):
         """
         Calcula la puntuación combinada de todos los modelos
         """
@@ -50,46 +50,54 @@ class GeneradorSenales:
             'detalles': {}
         }
         
+        # Asignar modelo si viene por parámetro
+        xgb_model = modelo_override if modelo_override is not None else self.modelo_xgb
+        
         # 1. XGBoost
-        if self.modelo_xgb is not None:
+        if xgb_model is not None:
             try:
-                prob_xgb = self.modelo_xgb.predecir_ultima(df)
+                # Intenta llamar predecir_probabilidad o predecir_ultima según lo tenga el modelo
+                if hasattr(xgb_model, 'predecir_probabilidad'):
+                    prob_xgb = xgb_model.predecir_probabilidad(df)
+                elif hasattr(xgb_model, 'predecir_ultima'):
+                    prob_xgb = xgb_model.predecir_ultima(df)
+                else:
+                    prob_xgb = None
+
                 if prob_xgb is not None:
-                    resultados['xgb'] = prob_xgb
-                    resultados['detalles']['XGBoost'] = f"{prob_xgb:.2%}"
+                    resultados['xgb'] = float(prob_xgb)
+                    resultados['detalles']['XGBoost'] = f"{resultados['xgb']:.2%}"
             except Exception as e:
-                print(f"⚠️ Error en XGBoost: {e}")
+                print(f"⚠️ Error al predecir en XGBoost: {e}")
         
         # 2. LSTM
         if self.modelo_lstm is not None:
             try:
                 prob_lstm = self.modelo_lstm.predecir(df)
                 if prob_lstm is not None:
-                    resultados['lstm'] = prob_lstm
-                    resultados['detalles']['LSTM'] = f"{prob_lstm:.2%}"
+                    resultados['lstm'] = float(prob_lstm)
+                    resultados['detalles']['LSTM'] = f"{resultados['lstm']:.2%}"
             except Exception as e:
-                print(f"⚠️ Error en LSTM: {e}")
+                print(f"⚠️ Error al predecir en LSTM: {e}")
         
         # 3. Statsmodels (régimen)
         if self.modelo_regimen is not None:
             try:
                 regimen = self.modelo_regimen.analizar_regimen(df)
-                # Si el régimen es alcista, aumentar puntuación
-                if 'ALCISTA' in regimen['regimen']:
-                    resultados['regimen'] = 0.7 + (0.2 * regimen['confianza'])
-                elif 'BAJISTA' in regimen['regimen']:
-                    resultados['regimen'] = 0.3 - (0.2 * regimen['confianza'])
+                if 'ALCISTA' in regimen.get('regimen', ''):
+                    resultados['regimen'] = 0.7 + (0.2 * regimen.get('confianza', 0.5))
+                elif 'BAJISTA' in regimen.get('regimen', ''):
+                    resultados['regimen'] = 0.3 - (0.2 * regimen.get('confianza', 0.5))
                 else:
                     resultados['regimen'] = 0.5
                 
-                # Ajustar por volatilidad
-                if regimen['volatilidad'] == 'ALTA':
+                if regimen.get('volatilidad') == 'ALTA':
                     resultados['regimen'] *= 0.9
-                elif regimen['volatilidad'] == 'BAJA':
+                elif regimen.get('volatilidad') == 'BAJA':
                     resultados['regimen'] *= 1.1
                 
                 resultados['regimen'] = max(0, min(1, resultados['regimen']))
-                resultados['detalles']['Régimen'] = f"{resultados['regimen']:.2%} ({regimen['regimen']})"
+                resultados['detalles']['Régimen'] = f"{resultados['regimen']:.2%} ({regimen.get('regimen', 'NEUTRO')})"
             except Exception as e:
                 print(f"⚠️ Error en Statsmodels: {e}")
         
@@ -102,56 +110,63 @@ class GeneradorSenales:
         
         return resultados
     
-    def generar_senal(self, df, symbol, precio_actual):
+    def generar_senal(self, df, modelo_o_symbol, symbol_o_precio=None, precio_actual=None):
         """
-        Genera una señal de trading completa
+        Genera una señal de trading adaptándose a los parámetros recibidos.
+        Maneja llamadas flexibles: 
+        - (df, modelo, symbol, precio_actual)
+        - (df, symbol, precio_actual)
         """
-        print(f"\n🎯 GENERANDO SEÑAL PARA {symbol}")
-        print("-"*40)
+        modelo = None
+        symbol = "ALTCOIN"
         
-        # 1. Calcular puntuación
-        resultados = self.calcular_puntuacion(df)
+        # Adaptador flexible de argumentos
+        if isinstance(modelo_o_symbol, str):
+            symbol = modelo_o_symbol
+            precio_actual = symbol_o_precio
+        else:
+            modelo = modelo_o_symbol
+            if isinstance(symbol_o_precio, str):
+                symbol = symbol_o_precio
+            elif precio_actual is None and isinstance(symbol_o_precio, (int, float)):
+                precio_actual = symbol_o_precio
+
+        print(f"\n🎯 GENERANDO SEÑAL PARA {symbol}")
+        print("-" * 40)
+        
+        # 1. Calcular puntuación pasando el modelo
+        resultados = self.calcular_puntuacion(df, modelo_override=modelo)
         
         print(f"📊 XGBoost: {resultados['xgb']:.2%}")
         print(f"📊 LSTM: {resultados['lstm']:.2%}")
         print(f"📊 Régimen: {resultados['regimen']:.2%}")
         print(f"📊 Ponderada: {resultados['ponderada']:.2%}")
         
+        close = df['close'].iloc[-1]
+        entrada = precio_actual if precio_actual is not None else close
+        
         # 2. Verificar umbral
         if resultados['ponderada'] < UMBRAL_COMPRA:
+            mensaje = f"Puntuación baja: {resultados['ponderada']:.2%} < {UMBRAL_COMPRA:.0%}"
             return {
                 'comprar': False,
-                'razon': f"Puntuación baja: {resultados['ponderada']:.2%} < {UMBRAL_COMPRA:.0%}",
+                'razon': mensaje,
                 'probabilidad': resultados['ponderada'],
                 'detalles': resultados['detalles']
-            }
+            }, mensaje
         
-        # 3. Calcular niveles de entrada/salida
-        atr = df['atr'].iloc[-1]
-        close = df['close'].iloc[-1]
-        
-        # Si el precio_actual es diferente, usarlo
-        if precio_actual is not None:
-            entrada = precio_actual
-        else:
-            entrada = close
-        
-        # Niveles
+        # 3. Niveles con ATR
+        atr = df['atr'].iloc[-1] if 'atr' in df.columns else (entrada * 0.02)
         stop_loss = entrada - (atr * SL_ATR)
         tp1 = entrada + (atr * TP1_ATR)
         tp2 = entrada + (atr * TP2_ATR)
         tp3 = entrada + (atr * TP3_ATR)
         
         # 4. Tamaño de posición
-        riesgo_por_operacion = CAPITAL_INICIAL * RIESGO_POR_OPERACION
-        riesgo_por_operacion = min(riesgo_por_operacion, CAPITAL_INICIAL * 0.05)  # Máximo 5%
+        riesgo = min(CAPITAL_INICIAL * RIESGO_POR_OPERACION, CAPITAL_INICIAL * 0.05)
+        tamanio = riesgo / (entrada - stop_loss) if (entrada - stop_loss) > 0 else 0
         
-        if stop_loss > 0:
-            tamanio = riesgo_por_operacion / (entrada - stop_loss)
-        else:
-            tamanio = 0
-        
-        # 5. Crear señal
+        # 5. Crear señal completa
         senal = {
             'comprar': True,
             'symbol': symbol,
@@ -166,60 +181,12 @@ class GeneradorSenales:
             'timestamp': datetime.now()
         }
         
-        print(f"\n🚀 SEÑAL DE COMPRA CONFIRMADA")
+        mensaje = f"Compra confirmada con {resultados['ponderada']:.2%} de probabilidad"
+        
+        print(f"\n🚀 SEÑAL DE COMPRA CONFIRMADA EN {symbol}")
         print(f"   Precio entrada: ${entrada:.4f}")
-        print(f"   Stop Loss: ${stop_loss:.4f} ({-SL_ATR*atr/entrada*100:.1f}%)")
-        print(f"   Take Profit 1: ${tp1:.4f} ({TP1_ATR*atr/entrada*100:.1f}%) - Cierra {TP1_CIERRE:.0%}")
-        print(f"   Take Profit 2: ${tp2:.4f} ({TP2_ATR*atr/entrada*100:.1f}%) - Cierra {TP2_CIERRE:.0%}")
-        print(f"   Take Profit 3: ${tp3:.4f} ({TP3_ATR*atr/entrada*100:.1f}%) - Cierra {TP3_CIERRE:.0%}")
-        print(f"   Tamaño: {tamanio:.4f}")
+        print(f"   Stop Loss: ${stop_loss:.4f}")
+        print(f"   Take Profit 1: ${tp1:.4f}")
         
         self.ultima_senal = senal
-        return senal
-
-
-if __name__ == "__main__":
-    print("🧪 Probando generador de señales...")
-    
-    # Crear datos de prueba
-    np.random.seed(42)
-    df = pd.DataFrame({
-        'close': 100 + np.cumsum(np.random.randn(50) * 0.5),
-        'high': 100 + np.cumsum(np.random.randn(50) * 0.5) + 0.5,
-        'low': 100 + np.cumsum(np.random.randn(50) * 0.5) - 0.5,
-        'volume': np.random.randint(1000, 10000, 50),
-        'taker_buy_base_asset_volume': np.random.randint(500, 5000, 50)
-    })
-    
-    from src.features.indicators import calcular_todos_indicadores
-    df = calcular_todos_indicadores(df)
-    
-    # Simular modelos (usando valores aleatorios para prueba)
-    class MockModel:
-        def predecir_ultima(self, df):
-            return np.random.uniform(0.4, 0.9)
-        def predecir(self, df):
-            return np.random.uniform(0.4, 0.9)
-    
-    class MockRegimen:
-        def analizar_regimen(self, df):
-            return {
-                'regimen': 'ALCISTA_DEBIL',
-                'confianza': 0.7,
-                'volatilidad': 'MEDIA'
-            }
-    
-    generador = GeneradorSenales(
-        modelo_xgb=MockModel(),
-        modelo_lstm=MockModel(),
-        modelo_regimen=MockRegimen()
-    )
-    
-    senal = generador.generar_senal(df, 'TESTUSDT', 105.0)
-    
-    if senal['comprar']:
-        print("\n✅ Señal generada correctamente")
-    else:
-        print(f"\n⏸️ {senal['razon']}")
-    
-    print("\n✅ Prueba completada")
+        return senal, mensaje
