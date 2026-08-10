@@ -115,6 +115,8 @@ class ExplosionBot:
         
         senales = []
         for g in candidatos:
+            time.sleep(0.15)  # 👈 AGREGAR ESTA LÍNEA AQUÍ (Evita el error -1003 Too Many Requests)
+            
             senal = self.analizar_moneda(g['symbol'], g)
             if senal:
                 senales.append(senal)
@@ -137,11 +139,7 @@ class ExplosionBot:
                     apalancamiento=5   # 5x apalancamiento
                 )
         
-        # Resumen
-        print("\n" + "="*60)
-        print(f"📊 RESUMEN: {len(senales)} señales válidas encontradas y ejecutadas")
-        print("="*60)
-
+      
     def ejecutar(self):
         """
         Bucle principal
