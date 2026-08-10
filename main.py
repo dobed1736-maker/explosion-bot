@@ -98,7 +98,7 @@ class BotMomentumDinamico:
             symbol = candidato['symbol']
             df = candidato['df']
             
-            senal, mensaje = generar_senal_compra(df, self.modelo)
+            senal, mensaje =  GeneradorSenales(df, self.modelo)
             
             if senal and senal['comprar']:
                 print(f"\n🚀 ¡COMPRA EJECUTADA EN {symbol}!: {mensaje}")
