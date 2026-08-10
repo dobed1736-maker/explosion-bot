@@ -1,126 +1,148 @@
-import pandas as pd
-import numpy as np
-from binance.client import Client
-from binance.exceptions import BinanceAPIException
+# ============================================================
+# CLIENTE DE BINANCE (CON CONTROL ROBUSTO DE RATE LIMIT)
+# ============================================================
+
 import sys
 import os
 import time
-from datetime import datetime, timedelta
+import random
+import pandas as pd
+from binance.client import Client
+from binance.exceptions import BinanceAPIException
 
-# Agregar raíz del proyecto al path
+# Agregar la raíz del proyecto al path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config.settings import (
     BINANCE_API_KEY,
     BINANCE_SECRET_KEY,
-    BINANCE_TESTNET,
-    TIMEFRAME,
-    PROXY_CONFIG  # ← Leemos el proxy configurado en settings.py
+    BINANCE_TESTNET
 )
 
+
 class BinanceClient:
-    """Cliente para interactuar con la API de Binance"""
+    """Cliente orquestador para interactuar con la API de Binance Futures"""
     
     def __init__(self):
         self.client = None
         self.conectar()
     
     def conectar(self):
-        """Establece conexión con Binance usando el Proxy residencial/ISP"""
+        """Establece la conexión con la API de Binance"""
         try:
-            req_params = {'timeout': 30}
-            
-            # Solo pasamos el proxy si realmente está configurado en .env
-            if PROXY_CONFIG:
-                req_params['proxies'] = PROXY_CONFIG
-                print("🛡️ Usando Proxy para Binance desde Webshare...")
-
             if BINANCE_TESTNET:
-                self.client = Client(
-                    BINANCE_API_KEY,
-                    BINANCE_SECRET_KEY,
-                    testnet=True,
-                    requests_params=req_params
-                )
-                self.client.FUTURES_URL = 'https://testnet.binancefuture.com/fapi'
-                print("🧪 Conectado a BINANCE FUTURES (TESTNET)")
+                self.client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY, testnet=True)
+                print("✅ Conectado a Binance Testnet")
             else:
-                self.client = Client(
-                    BINANCE_API_KEY,
-                    BINANCE_SECRET_KEY,
-                    requests_params=req_params
-                )
-                print("⚡ Conectado a BINANCE REAL")
-                
+                self.client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
+                print("⚠️ Conectado a Binance MAINNET")
+            
+            self.client.ping()
+            return True
         except Exception as e:
             print(f"❌ Error conectando a Binance: {e}")
-            self.client = None
+            return False
+    
+    def obtener_velas(self, symbol, intervalo='5m', limit=1000):
+        """
+        Obtiene velas históricas con reintentos inteligentes en caso de Rate Limit (-1003)
+        """
+        max_retries = 3
+        for intento in range(max_retries):
+            try:
+                if self.client is None:
+                    self.conectar()
+                
+                klines = self.client.futures_klines(
+                    symbol=symbol,
+                    interval=intervalo,
+                    limit=limit
+                )
+                
+                df = pd.DataFrame(klines, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'quote_asset_volume', 'number_of_trades',
+                    'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+                ])
+                
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+                df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+                df = df.sort_values('timestamp')
+                
+                return df
+                
+            except Exception as e:
+                err_msg = str(e).lower()
+                # Captura aviso de saturación o baneo temporal de API
+                if "1003" in err_msg or "too many" in err_msg or "429" in err_msg or "banned" in err_msg:
+                    wait_time = (2 ** intento) + random.uniform(1.0, 3.0)
+                    print(f"⚠️ Rate limit en {symbol}. Pausando {wait_time:.1f}s antes del reintento {intento + 1}/{max_retries}...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"❌ Error obteniendo velas de {symbol}: {e}")
+                    return pd.DataFrame()
+                    
+        return pd.DataFrame()
 
-    def obtener_velas(self, symbol, intervalo=TIMEFRAME, limit=100):
-        """Obtiene velas históricas para un símbolo"""
+    def obtener_precio_actual(self, symbol):
+        """Obtiene el último precio registrado de una moneda"""
         try:
-            if not self.client:
+            if self.client is None:
                 self.conectar()
-                
-            klines = self.client.futures_klines(
-                symbol=symbol,
-                interval=intervalo,
-                limit=limit
-            )
-            
-            df = pd.DataFrame(klines, columns=[
-                'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_asset_volume', 'number_of_trades',
-                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-            ])
-            
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            for col in ['open', 'high', 'low', 'close', 'volume', 'taker_buy_base_asset_volume']:
-                df[col] = df[col].astype(float)
-                
-            return df
-            
+            ticker = self.client.futures_ticker(symbol=symbol)
+            return float(ticker['lastPrice'])
         except Exception as e:
-            print(f"❌ Error obteniendo velas de {symbol}: {e}")
-            return pd.DataFrame()
+            print(f"❌ Error obteniendo precio de {symbol}: {e}")
+            return None
 
     def obtener_top_ganadores(self, limit=50):
-        """Obtiene las monedas con mayor volumen/variación"""
+        """Obtiene el listado de las monedas de Futuros USDT con mayor volumen/movimiento"""
         try:
-            if not self.client:
+            if self.client is None:
                 self.conectar()
-                
+            
             tickers = self.client.futures_ticker()
-            df = pd.DataFrame(tickers)
-            df['priceChangePercent'] = df['priceChangePercent'].astype(float)
-            df['quoteVolume'] = df['quoteVolume'].astype(float)
+            candidatos = []
             
-            # Filtrar solo pares con USDT
-            df = df[df['symbol'].str.endswith('USDT')]
+            for t in tickers:
+                symbol = t['symbol']
+                # Filtrar solo pares contra USDT válidos
+                if symbol.endswith('USDT') and not symbol.startswith('LD'):
+                    volumen = float(t.get('quoteVolume', 0))
+                    precio = float(t.get('lastPrice', 0))
+                    cambio = float(t.get('priceChangePercent', 0))
+                    
+                    if volumen > 0 and precio > 0:
+                        candidatos.append({
+                            'symbol': symbol,
+                            'volumen': volumen,
+                            'precio': precio,
+                            'cambio_24h': cambio
+                        })
             
-            # Ordenar por cambio porcentual de 24h
-            top = df.sort_values(by='priceChangePercent', ascending=False).head(limit)
-            return top[['symbol', 'priceChangePercent', 'quoteVolume', 'lastPrice']].to_dict('records')
+            # Ordenar por volumen descendente
+            candidatos.sort(key=lambda x: x['volumen'], reverse=True)
+            return candidatos[:limit]
             
         except Exception as e:
             print(f"❌ Error obteniendo top ganadores: {e}")
             return []
 
-    def obtener_order_book(self, symbol, limit=20):
+    def obtener_order_book(self, symbol, limit=10):
         """Obtiene el libro de órdenes"""
         try:
-            if not self.client:
+            if self.client is None:
                 self.conectar()
-            depth = self.client.futures_order_book(symbol=symbol, limit=limit)
-            return depth
+            return self.client.futures_order_book(symbol=symbol, limit=limit)
         except Exception as e:
             print(f"❌ Error obteniendo order book de {symbol}: {e}")
             return {}
 
     def obtener_funding_rate(self, symbol):
-        """Obtiene la tasa de financiación actual"""
+        """Obtiene la tasa de financiación actual (Funding Rate)"""
         try:
-            if not self.client:
+            if self.client is None:
                 self.conectar()
             res = self.client.futures_funding_rate(symbol=symbol, limit=1)
             if res:
@@ -131,27 +153,45 @@ class BinanceClient:
             return 0.0
 
 
-# Instancia global
-_binance_client = None
+# ============================================================
+# INSTANCIA GLOBAL Y FUNCIONES HELPER
+# ============================================================
+
+_cliente = None
 
 def get_client():
-    global _binance_client
-    if _binance_client is None:
-        _binance_client = BinanceClient()
-    return _binance_client
+    global _cliente
+    if _cliente is None:
+        _cliente = BinanceClient()
+    return _cliente
 
-def obtener_datos(symbol, intervalo=TIMEFRAME, limit=100):
+def obtener_datos(symbol, intervalo='5m', limit=1000):
     client = get_client()
     return client.obtener_velas(symbol, intervalo, limit)
 
 def obtener_ganadores(limit=50):
     client = get_client()
-    return client.obtener_top_ganadores(limit)
+    return client.obtener_top_ganadores(limit=limit)
 
-def obtener_order_book(symbol, limit=20):
+def obtener_order_book(symbol, limit=10):
     client = get_client()
-    return client.obtener_order_book(symbol, limit)
+    return client.obtener_order_book(symbol, limit=limit)
 
 def obtener_funding_rate(symbol):
     client = get_client()
     return client.obtener_funding_rate(symbol)
+
+
+if __name__ == "__main__":
+    print("="*50)
+    print("🧪 Probando conexión y cliente de Binance")
+    print("="*50)
+    client = get_client()
+    df = client.obtener_velas('BTCUSDT', '5m', 100)
+    
+    if not df.empty:
+        print("\n✅ Datos de prueba obtenidos correctamente:")
+        print(df.head(3))
+        print(f"\n📈 Último precio BTCUSDT: ${df['close'].iloc[-1]:,.2f}")
+    else:
+        print("\n❌ No se pudieron obtener datos de prueba.")
