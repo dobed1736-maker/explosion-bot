@@ -74,7 +74,7 @@ class ExplosionBot:
         
     def analizar_moneda(self, symbol, info_ganador):
         """
-        Analiza una moneda individual pasando por Filtros + ML + Risk Manager
+        Analiza una moneda individual con diagnóstico transparente de filtros y ML
         """
         try:
             # 1. Obtener datos de Binance
@@ -88,13 +88,19 @@ class ExplosionBot:
             # 3. Aplicar los filtros cuantitativos
             pasa_filtros, detalles_filtros = aplicar_todos_los_filtros(df)
             if not pasa_filtros:
+                # 💡 Muestra qué filtro técnico la rechazó
+                # print(f"⚪ {symbol}: Rechazado por filtros técnicos ({detalles_filtros})")
                 return None
                 
             # 4. Generar señal y score de ML
             precio_actual = info_ganador.get('precio', df['close'].iloc[-1])
             senal = self.generador.generar_senal(df, symbol, precio_actual)
             
-            if not senal or not senal.get('comprar', False) or senal.get('probabilidad', 0) < UMBRAL_COMPRA:
+            prob = senal.get('probabilidad', 0) if senal else 0
+            
+            # 💡 Diagnóstico de la IA
+            if prob < UMBRAL_COMPRA:
+                print(f"📊 {symbol}: Pasó filtros técnicos | Confianza IA: {prob:.1%} (Requerido: {UMBRAL_COMPRA:.0%})")
                 return None
                 
             return senal
