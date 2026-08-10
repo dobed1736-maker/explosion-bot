@@ -158,3 +158,63 @@ def resumen_filtros(resultados):
         resumen += f"\n   {icono} {nombre}: {detalle['mensaje']}"
     
     return resumen
+
+# ============================================================
+# CONECTOR PARA MAIN.PY
+# ============================================================
+
+def pasar_filtros(df, symbol=""):
+    """
+    Evaluación rápida de un dataframe individual para verificar
+    si cumple con la estructura mínima para pasar al modelo.
+    """
+    if df is None or df.empty or len(df) < 30:
+        return False
+    return True
+
+
+def obtener_candidatos(datos_monedas, df_btc=None):
+    """
+    Recorre el diccionario de monedas analizadas en main.py
+    y devuelve la lista de candidatas que pasan la evaluación de filtros.
+    """
+    candidatos = []
+    
+    # Calcular cambio de BTC si está disponible
+    btc_cambio = 0.0
+    if df_btc is not None and not df_btc.empty:
+        btc_cambio = ((df_btc['close'].iloc[-1] - df_btc['close'].iloc[0]) / df_btc['close'].iloc[0]) * 100
+
+    for symbol, df in datos_monedas.items():
+        if df is None or df.empty:
+            continue
+            
+        # Preparar datos mínimos para aplicar_todos_los_filtros
+        precio_actual = df['close'].iloc[-1]
+        precio_inicio = df['close'].iloc[0]
+        cambio_pct = ((precio_actual - precio_inicio) / precio_inicio) * 100 if precio_inicio > 0 else 0
+        volumen_total = df['volume'].sum() * precio_actual
+        
+        ganador_info = {
+            'volumen': volumen_total,
+            'cambio': cambio_pct
+        }
+        
+        # Ejecutar tu filtro maestro de 5 capas
+        res = aplicar_todos_los_filtros(
+            df=df,
+            symbol=symbol,
+            ganador_info=ganador_info,
+            book_imbalance=0.0,
+            funding_rate=0.0,
+            btc_cambio=btc_cambio
+        )
+        
+        if res['pasa_todos']:
+            candidatos.append({
+                'symbol': symbol,
+                'df': df,
+                'puntuacion': res['puntuacion']
+            })
+            
+    return candidatos

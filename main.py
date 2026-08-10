@@ -24,7 +24,7 @@ from config.settings import (
 from src.data.binance_client import obtener_datos, get_client
 from src.features.indicators import calcular_todos_indicadores
 from src.models.xgboost_model import ModeloExplosiones
-from src.signals.filters import pasar_filtros, obtener_candidatos
+from src.features.filters import pasar_filtros, obtener_candidatos
 from src.signals.signal_generator import generar_senal_compra
 from src.execution.order_manager import OrderManager
 from src.utils.logger import log_error, log_senal
