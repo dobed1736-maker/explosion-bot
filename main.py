@@ -1,175 +1,125 @@
 # ============================================================
-# EXPLOSION BOT - PUNTO DE ENTRADA PRINCIPAL
+# BOT DE MOMENTUM - PUNTO DE ENTRADA PRINCIPAL
 # ============================================================
 
 import sys
 import os
 import time
-import pandas as pd
-import numpy as np
+import random
 from datetime import datetime
+import pandas as pd
 
 # Agregar raíz al path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import (
-    TOP_A_ESCANEAR,
-    TIMEFRAME,
+    MONEDAS,
+    MONEDA_REFERENCIA,
+    TIMEFRAME_ML,
     INTERVALO_EJECUCION,
     CAPITAL_INICIAL,
-    MAX_OPERACIONES_SIMULTANEAS,
-    UMBRAL_COMPRA
+    MAX_OPERACIONES_SIMULTANEAS
 )
 
-from src.data.binance_client import (
-    get_client,
-    obtener_datos,
-    obtener_ganadores,
-    obtener_order_book,
-    obtener_funding_rate
-)
-
+from src.data.binance_client import obtener_datos, get_client
 from src.features.indicators import calcular_todos_indicadores
-from src.features.filters import aplicar_todos_los_filtros, resumen_filtros
-from src.models.xgboost_model import ModeloXGBoost
-from src.models.lstm_model import ModeloLSTM
-from src.models.regime_model import ModeloRegimen
-from src.signals.signal_generator import GeneradorSenales
-from src.signals.risk_manager import RiskManager
+from src.models.xgboost_model import ModeloExplosiones
+from src.signals.filters import pasar_filtros, obtener_candidatos
+from src.signals.signal_generator import generar_senal_compra
 from src.execution.order_manager import OrderManager
 from src.utils.logger import log_error, log_senal
-from src.utils.excel_exporter import exportar_a_excel
-from src.utils.telegram_bot import enviar_telegram
 
 
-class ExplosionBot:
-    """
-    Orquestador principal del bot de trading cuantitativo
-    """
+class BotMomentum:
     def __init__(self):
+        print("\n" + "="*60)
+        print("🚀 BOT DE MOMENTUM - CAZADOR DE EXPLOSIONES")
         print("="*60)
-        print("🚀 INICIALIZANDO EXPLOSION BOT")
+        
+        # Conectar a Binance
+        self.client = get_client()
+        
+        # Cargar modelo
+        self.modelo = ModeloExplosiones()
+        if not self.modelo.cargar():
+            print("⚠️ Modelo no encontrado. Entrenando nuevo...")
+            self._entrenar_modelo()
+        
+        # Gestor de órdenes
+        self.ordenes = OrderManager()
+        
+        print(f"💰 Capital: ${CAPITAL_INICIAL}")
+        print(f"📊 Monedas en lista: {len(MONEDAS)}")
+        print(f"⏱️ Intervalo: {INTERVALO_EJECUCION//60} minutos")
         print("="*60)
-        
-        # 1. Cargar modelos de Machine Learning
-        print("\n🧠 Cargando modelos de Inteligencia Artificial...")
-        self.modelo_xgb = ModeloXGBoost()
-        self.modelo_xgb.cargar()
-        
-        self.modelo_lstm = ModeloLSTM()
-        self.modelo_lstm.cargar()
-        
-        self.modelo_regimen = ModeloRegimen()
-        
-        # 2. Inicializar generadores y gestores
-        self.generador = GeneradorSenales(
-            modelo_xgb=self.modelo_xgb,
-            modelo_lstm=self.modelo_lstm,
-            modelo_regimen=self.modelo_regimen
-        )
-        self.risk_manager = RiskManager()
-        self.order_manager = OrderManager()
-        
-        print("✅ Bot configurado y listo para escanear el mercado")
-        
-    def analizar_moneda(self, symbol, info_ganador):
-        """
-        Analiza una moneda individual con diagnóstico transparente de filtros y ML
-        """
+    
+    def _entrenar_modelo(self):
+        """Entrena el modelo si no existe"""
         try:
-            # 1. Obtener datos de Binance
-            df = obtener_datos(symbol, TIMEFRAME, limit=100)
-            if df.empty or len(df) < 50:
-                return None
-                
-            # 2. Calcular indicadores
-            df = calcular_todos_indicadores(df)
+            # Cargar dataset unificado
+            if not os.path.exists("data/processed/dataset_unificado.csv"):
+                print("⚠️ Dataset no encontrado. Descargando datos...")
+                from src.data.data_processor import preparar_todas_las_monedas
+                df_total = preparar_todas_las_monedas()
+            else:
+                df_total = pd.read_csv("data/processed/dataset_unificado.csv")
             
-            # 3. Aplicar los filtros cuantitativos
-            pasa_filtros, detalles_filtros = aplicar_todos_los_filtros(df)
-            if not pasa_filtros:
-                # 💡 Muestra qué filtro técnico la rechazó
-                # print(f"⚪ {symbol}: Rechazado por filtros técnicos ({detalles_filtros})")
-                return None
-                
-            # 4. Generar señal y score de ML
-            precio_actual = info_ganador.get('precio', df['close'].iloc[-1])
-            senal = self.generador.generar_senal(df, symbol, precio_actual)
-            
-            prob = senal.get('probabilidad', 0) if senal else 0
-            
-            # 💡 Diagnóstico de la IA
-            if prob < UMBRAL_COMPRA:
-                print(f"📊 {symbol}: Pasó filtros técnicos | Confianza IA: {prob:.1%} (Requerido: {UMBRAL_COMPRA:.0%})")
-                return None
-                
-            return senal
+            # Entrenar
+            self.modelo.entrenar(df_total)
+            self.modelo.guardar()
             
         except Exception as e:
-            log_error(f"Error analizando {symbol}", e)
-            return None
-
-    def ejecutar_ciclo(self):
-        """
-        Ejecuta un ciclo de escaneo completo
-        """
-        print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔍 Iniciando escaneo de mercado...")
-        
-        # 1. Obtener top monedas volátiles/ganadoras
-        candidatos = obtener_ganadores(limit=TOP_A_ESCANEAR)
-        print(f"📋 Analizando Top {len(candidatos)} monedas más activas...")
-        
-        senales = []
-        for g in candidatos:
-            time.sleep(1)  # 👈 AGREGAR ESTA LÍNEA AQUÍ (Evita el error -1003 Too Many Requests)
-            
-            senal = self.analizar_moneda(g['symbol'], g)
-            if senal:
-                senales.append(senal)
-                
-                # A. Guardar en Logs
-                log_senal(g['symbol'], "COMPRA", senal['probabilidad'], senal['precio_entrada'])
-                
-                # B. Enviar Alerta a Telegram
-                msg = f"🚀 SEÑAL EN {senal['symbol']}\nProbabilidad: {senal['probabilidad']:.2%}\nPrecio Entrada: ${senal['precio_entrada']:.4f}"
-                enviar_telegram(msg)
-                
-                # C. 🔥 EJECUTAR AUTOMÁTICAMENTE EN TESTNET
-                print(f"🔥 Disparando orden en Testnet para {senal['symbol']} (Probabilidad: {senal['probabilidad']:.2%})")
-                self.order_manager.ejecutar_orden_compra(
-                    symbol=senal['symbol'],
-                    precio_entrada=senal['precio_entrada'],
-                    stop_loss=senal['stop_loss'],
-                    take_profit=senal['take_profit_1'],
-                    margen_usdt=20,     # $20 USD por operación
-                    apalancamiento=5   # 5x apalancamiento
-                )
-        
-      
-    def ejecutar(self):
-        """
-        Bucle principal
-        """
-        while True:
-            try:
-                self.ejecutar_ciclo()
-                print(f"\n⏳ Esperando {INTERVALO_EJECUCION//60} minutos para el siguiente escaneo...")
-                time.sleep(INTERVALO_EJECUCION)
-                
-            except KeyboardInterrupt:
-                print("\n🛑 Bot detenido por el usuario")
-                break
-                
-            except Exception as e:
-                print(f"❌ Error en ejecución: {e}")
-                log_error("Error en ejecución", e)
-                time.sleep(30)
-
-
-if __name__ == "__main__":
-    os.makedirs("data/raw", exist_ok=True)
-    os.makedirs("data/processed", exist_ok=True)
-    os.makedirs("logs", exist_ok=True)
+            print(f"❌ Error entrenando modelo: {e}")
+            log_error("Error entrenando modelo", e)
     
-    bot = ExplosionBot()
-    bot.ejecutar()
+    def ejecutar(self):
+        """Ciclo principal del bot"""
+        print("\n🔍 INICIANDO ANÁLISIS...")
+        print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("-"*60)
+        
+        # 1. Obtener datos de todas las monedas con pausa prudente entre peticiones
+        datos_monedas = {}
+        total_monedas = len(MONEDAS)
+        
+        for idx, symbol in enumerate(MONEDAS, 1):
+            # Pausa humana aleatoria (entre 1.1s y 1.5s) para cuidar la IP y el Rate Limit
+            time.sleep(1.0 + random.uniform(0.1, 0.5))
+            
+            df = obtener_datos(symbol, TIMEFRAME_ML, 100)
+            if not df.empty:
+                df = calcular_todos_indicadores(df)
+                datos_monedas[symbol] = df
+                print(f"  [ {idx}/{total_monedas} ] ✅ {symbol} procesado correctamente")
+            else:
+                print(f"  [ {idx}/{total_monedas} ] ❌ Sin datos para {symbol}")
+        
+        # 2. Obtener BTC para el contexto de mercado
+        time.sleep(1.0)
+        df_btc = obtener_datos(MONEDA_REFERENCIA, TIMEFRAME_ML, 100)
+        if not df_btc.empty:
+            df_btc = calcular_todos_indicadores(df_btc)
+        
+        # 3. Aplicar filtros de selección
+        print("\n🔎 APLICANDO FILTROS...")
+        candidatos = obtener_candidatos(datos_monedas, df_btc)
+        
+        if not candidatos:
+            print("\n⚠️ No hay candidatos que pasen los filtros en este ciclo.")
+            return
+        
+        # 4. Generar señales de compra
+        print(f"\n🎯 GENERANDO SEÑALES DE COMPRA...")
+        
+        for candidato in candidatos:
+            symbol = candidato['symbol']
+            df = candidato['df']
+            
+            senal, mensaje = generar_senal_compra(df, self.modelo)
+            
+            if senal and senal['comprar']:
+                print(f"\n🚀 {symbol}: {mensaje}")
+                log_senal(symbol, "COMPRA", senal['probabilidad'], senal['precio_entrada'])
+                
+                # Ejecutar compra
+                self.ordenes.ejecutar_compra
