@@ -61,14 +61,14 @@ class OrderManager:
             # 1. Configurar Apalancamiento (5x)
             try:
                 self.client.futures_change_leverage(symbol=symbol, leverage=apalancamiento)
-                print(f"  └─ Apalancamiento configurado: {apalancamiento}x")
+                print(f"   └─ Apalancamiento configurado: {apalancamiento}x")
             except Exception as e:
-                print(f"  └─ ⚠️ No se pudo cambiar apalancamiento: {e}")
+                print(f"   └─ ⚠️ No se pudo cambiar apalancamiento: {e}")
 
             # 2. Configurar Margen Aislado (ISOLATED)
             try:
                 self.client.futures_change_margin_type(symbol=symbol, marginType='ISOLATED')
-                print("  └─ Tipo de margen: ISOLATED")
+                print("   └─ Tipo de margen: ISOLATED")
             except Exception:
                 pass # Si ya está en ISOLATED ignora el aviso
 
@@ -98,7 +98,7 @@ class OrderManager:
                 sl_price_formatted = int(sl_price_formatted)
                 tp_price_formatted = int(tp_price_formatted)
 
-            print(f"  └─ Entrada: {quantity} {symbol} (~${notional_total} USDT nocional)")
+            print(f"   └─ Entrada: {quantity} {symbol} (~${notional_total} USDT nocional)")
 
             # 5. Enviar Orden LONG a Mercado (BUY)
             order = self.client.futures_create_order(
@@ -109,33 +109,61 @@ class OrderManager:
             )
             print(f"✅ ¡ORDEN EJECUTADA EN BINANCE! ID: {order.get('orderId')}")
 
-            # 6. Colocar Stop Loss Automático
+            # 6. Colocar Stop Loss Automático (Usando Algo Order Endpoint)
             try:
-                sl_order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side='SELL',
-                    type='STOP_MARKET',
-                    stopPrice=sl_price_formatted,
-                    closePosition='true',
-                    workingType='MARK_PRICE'
-                )
-                print(f"  └─ 🛑 Stop Loss fijado en: ${sl_price_formatted}")
+                if hasattr(self.client, 'futures_place_algo_order'):
+                    sl_order = self.client.futures_place_algo_order(
+                        symbol=symbol,
+                        side='SELL',
+                        type='STOP_MARKET',
+                        triggerPrice=str(sl_price_formatted),
+                        closePosition='TRUE',
+                        workingType='MARK_PRICE'
+                    )
+                else:
+                    sl_order = self.client._request_api(
+                        'post', 'fapi/v1/algo/order',
+                        data={
+                            'symbol': symbol,
+                            'side': 'SELL',
+                            'type': 'STOP_MARKET',
+                            'triggerPrice': str(sl_price_formatted),
+                            'closePosition': 'TRUE',
+                            'workingType': 'MARK_PRICE'
+                        },
+                        signed=True
+                    )
+                print(f"   └─ 🛑 Stop Loss fijado en: ${sl_price_formatted}")
             except Exception as e_sl:
-                print(f"  └─ ❌ Error al colocar SL: {e_sl}")
+                print(f"   └─ ❌ Error al colocar SL: {e_sl}")
 
-            # 7. Colocar Take Profit Automático (TP1)
+            # 7. Colocar Take Profit Automático (Usando Algo Order Endpoint)
             try:
-                tp_order = self.client.futures_create_order(
-                    symbol=symbol,
-                    side='SELL',
-                    type='TAKE_PROFIT_MARKET',
-                    stopPrice=tp_price_formatted,
-                    closePosition='true',
-                    workingType='MARK_PRICE'
-                )
-                print(f"  └─ 🎯 Take Profit 1 fijado en: ${tp_price_formatted}")
+                if hasattr(self.client, 'futures_place_algo_order'):
+                    tp_order = self.client.futures_place_algo_order(
+                        symbol=symbol,
+                        side='SELL',
+                        type='TAKE_PROFIT_MARKET',
+                        triggerPrice=str(tp_price_formatted),
+                        closePosition='TRUE',
+                        workingType='MARK_PRICE'
+                    )
+                else:
+                    tp_order = self.client._request_api(
+                        'post', 'fapi/v1/algo/order',
+                        data={
+                            'symbol': symbol,
+                            'side': 'SELL',
+                            'type': 'TAKE_PROFIT_MARKET',
+                            'triggerPrice': str(tp_price_formatted),
+                            'closePosition': 'TRUE',
+                            'workingType': 'MARK_PRICE'
+                        },
+                        signed=True
+                    )
+                print(f"   └─ 🎯 Take Profit 1 fijado en: ${tp_price_formatted}")
             except Exception as e_tp:
-                print(f"  └─ ❌ Error al colocar TP: {e_tp}")
+                print(f"   └─ ❌ Error al colocar TP: {e_tp}")
 
             return order
 
@@ -144,4 +172,5 @@ class OrderManager:
             return None
         except Exception as e:
             print(f"❌ Error inesperado en OrderManager para {symbol}: {e}")
-            return None
+            return None    
+        
