@@ -34,15 +34,16 @@ class OrderManager:
                 elif f['filterType'] == 'PRICE_FILTER':
                     tick_size = float(f['tickSize'])
 
-        # Calcular decimales para cantidad
-        prec_qty = 0
-        if step_size < 1:
-            prec_qty = len(str(step_size).split('.')[1].rstrip('0'))
+        def contar_decimales(valor):
+            # Formatear como flotante fijo para evitar problemas con notación científica (1e-05)
+            s = f"{valor:.10f}".rstrip('0')
+            if '.' in s:
+                partes = s.split('.')
+                return len(partes[1]) if len(partes) > 1 else 0
+            return 0
 
-        # Calcular decimales para precio
-        prec_price = 0
-        if tick_size < 1:
-            prec_price = len(str(tick_size).split('.')[1].rstrip('0'))
+        prec_qty = contar_decimales(step_size)
+        prec_price = contar_decimales(tick_size)
 
         return prec_qty, prec_price
 
@@ -53,6 +54,10 @@ class OrderManager:
         try:
             print(f"\n🚀 [ORDER MANAGER] Iniciando orden LONG para {symbol}...")
             
+            if not self.client:
+                print("❌ Cliente Binance REST no disponible.")
+                return None
+
             # 1. Configurar Apalancamiento (5x)
             try:
                 self.client.futures_change_leverage(symbol=symbol, leverage=apalancamiento)
@@ -69,7 +74,12 @@ class OrderManager:
 
             # 3. Obtener precisión exacta de la moneda (Cantidad y Precio)
             info = self.client.futures_exchange_info()
-            symbol_info = next((item for item in info['symbols'] if item['symbol'] == symbol), None)
+            symbol_info = next((item for item in info.get('symbols', []) if item['symbol'] == symbol), None)
+            
+            if not symbol_info:
+                print(f"⚠️ {symbol} no fue encontrado en el exchange_info de Binance Futuros.")
+                return None
+
             prec_qty, prec_price = self._obtener_precisiones(symbol_info)
 
             # 4. Calcular cantidad basada en $20 USD * 5x = $100 USD de posición
@@ -97,7 +107,7 @@ class OrderManager:
                 type='MARKET',
                 quantity=quantity
             )
-            print(f"✅ ¡ORDEN EJECUTADA EN TESTNET! ID: {order.get('orderId')}")
+            print(f"✅ ¡ORDEN EJECUTADA EN BINANCE! ID: {order.get('orderId')}")
 
             # 6. Colocar Stop Loss Automático
             try:
