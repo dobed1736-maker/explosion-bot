@@ -29,8 +29,17 @@ class BinanceDynamicWSClient:
     def __init__(self):
         self.testnet = BINANCE_TESTNET
         client_kwargs = {'testnet': self.testnet}
+        
+        # ✅ CORRECCIÓN: 'proxies' en plural y mapeado a http/https
         if PROXY_CONFIG:
-            client_kwargs['requests_params'] = {'proxy': PROXY_CONFIG.get('https')}
+            proxy_url = PROXY_CONFIG.get('https') or PROXY_CONFIG.get('http')
+            if proxy_url:
+                client_kwargs['requests_params'] = {
+                    'proxies': {
+                        'http': proxy_url,
+                        'https': proxy_url
+                    }
+                }
 
         self.client_rest = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY, **client_kwargs)
         self.twm = None
