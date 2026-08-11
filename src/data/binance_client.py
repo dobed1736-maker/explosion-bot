@@ -9,7 +9,7 @@ import os
 from binance import ThreadedWebsocketManager
 from binance.client import Client
 
-DIRECTORIO_RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DIRECTORIO_RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if DIRECTORIO_RAIZ not in sys.path:
     sys.path.insert(0, DIRECTORIO_RAIZ)
 
@@ -30,10 +30,14 @@ class BinanceDynamicWSClient:
         self.testnet = BINANCE_TESTNET
         client_kwargs = {'testnet': self.testnet}
         
-        # ✅ CORRECCIÓN: 'proxies' en plural y mapeado a http/https
+        # ✅ FORZAR PROXY A NIVEL DE SISTEMA Y SESIÓN PARA FUTURES
         if PROXY_CONFIG:
             proxy_url = PROXY_CONFIG.get('https') or PROXY_CONFIG.get('http')
             if proxy_url:
+                # Inyectar al entorno para que Futures API no lo esquive
+                os.environ['HTTP_PROXY'] = proxy_url
+                os.environ['HTTPS_PROXY'] = proxy_url
+                
                 client_kwargs['requests_params'] = {
                     'proxies': {
                         'http': proxy_url,
@@ -60,7 +64,6 @@ class BinanceDynamicWSClient:
                 pct_change = float(t['priceChangePercent'])
                 quote_volume = float(t['quoteVolume'])
                 
-                # Filtrar estrictamente por tu rango de subida original (5% - 50%) y volumen
                 if RANGO_ENTRADA_MIN <= pct_change <= RANGO_ENTRADA_MAX and quote_volume >= VOLUMEN_MINIMO_USDT:
                     candidatos.append({
                         'symbol': symbol,
@@ -68,7 +71,6 @@ class BinanceDynamicWSClient:
                         'volume': quote_volume
                     })
             
-            # Ordenar por el % de explosión más alto
             candidatos = sorted(candidatos, key=lambda x: x['change'], reverse=True)[:TOP_A_ESCANEAR]
             simbolos = [c['symbol'] for c in candidatos]
             print(f"🔥 Escáner halló {len(simbolos)} ganadores en explosión (+{RANGO_ENTRADA_MIN}% a +{RANGO_ENTRADA_MAX}%).")
@@ -88,7 +90,6 @@ class BinanceDynamicWSClient:
             ])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            # Convertir columnas numéricas necesarias
             columnas_num = [
                 'open', 'high', 'low', 'close', 'volume',
                 'quote_asset_volume', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume'
@@ -138,6 +139,10 @@ class BinanceDynamicWSClient:
         for symbol in simbolos:
             if symbol not in self.sockets_activos:
                 self.velas_memoria[symbol] = self._cargar_historial_inicial(symbol)
+                
+                # ✅ PAUSA DE RITMO: Evita ráfagas demasiado rápidas al servidor
+                time.sleep(0.15)
+                
                 self.twm.start_kline_futures_socket(
                     callback=self._procesar_mensaje_kline,
                     symbol=symbol,
