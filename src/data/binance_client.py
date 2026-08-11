@@ -141,7 +141,7 @@ class BinanceDynamicWSClient:
                 self.velas_memoria[symbol] = self._cargar_historial_inicial(symbol)
                 
                 # ✅ PAUSA DE RITMO: Evita ráfagas demasiado rápidas al servidor
-                time.sleep(0.15)
+                time.sleep(0.35)
                 
                 self.twm.start_kline_futures_socket(
                     callback=self._procesar_mensaje_kline,
