@@ -71,47 +71,34 @@ class OrderManager:
             return str(int(cant_ajustada))
         return f"{cant_ajustada:.{prec_qty}f}"
 
-    def _colocar_orden_proteccion(self, symbol, order_type, trigger_price_str, max_retries=3):
+    def _colocar_orden_proteccion(self, symbol, order_type, trigger_price_str, quantity_str, max_retries=3):
         """
-        Intenta colocar orden de proteccion (SL o TP) con reintentos y fallback de endpoints.
+        Intenta colocar orden de protección (SL o TP) limpia y sin errores de serialización JSON.
         """
         for intento in range(1, max_retries + 1):
             try:
-                # Intento A: Orden de Futuros estándar (STOP_MARKET / TAKE_PROFIT_MARKET)
+                # Método 1: futures_create_order estándar con closePosition booleano
                 res = self.client.futures_create_order(
                     symbol=symbol,
                     side='SELL',
                     type=order_type,
                     stopPrice=trigger_price_str,
-                    closePosition='true',
+                    closePosition=True,
                     workingType='MARK_PRICE'
                 )
                 return True, res
             except Exception as e1:
-                # Intento B: Fallback al endpoint de Algo Orders si falla el estándar
                 try:
-                    if hasattr(self.client, 'futures_place_algo_order'):
-                        res = self.client.futures_place_algo_order(
-                            symbol=symbol,
-                            side='SELL',
-                            type=order_type,
-                            triggerPrice=trigger_price_str,
-                            closePosition='TRUE',
-                            workingType='MARK_PRICE'
-                        )
-                    else:
-                        res = self.client._request_api(
-                            'post', 'fapi/v1/algo/order',
-                            data={
-                                'symbol': symbol,
-                                'side': 'SELL',
-                                'type': order_type,
-                                'triggerPrice': trigger_price_str,
-                                'closePosition': 'TRUE',
-                                'workingType': 'MARK_PRICE'
-                            },
-                            signed=True
-                        )
+                    # Método 2: Fallback utilizando cantidad explícita y reduceOnly si closePosition falla
+                    res = self.client.futures_create_order(
+                        symbol=symbol,
+                        side='SELL',
+                        type=order_type,
+                        stopPrice=trigger_price_str,
+                        quantity=quantity_str,
+                        reduceOnly=True,
+                        workingType='MARK_PRICE'
+                    )
                     return True, res
                 except Exception as e2:
                     print(f"    └─ ⚠️ [INTENTO {intento}/{max_retries}] Error enviando {order_type} en {symbol}: {e2}")
@@ -128,7 +115,7 @@ class OrderManager:
                 side='SELL',
                 type='MARKET',
                 quantity=quantity_str,
-                reduceOnly='true'
+                reduceOnly=True
             )
             print(f"🛑 Posición en {symbol} CERRADA POR SEGURIDAD. ID: {close_order.get('orderId')}")
             return True
@@ -191,11 +178,12 @@ class OrderManager:
             )
             print(f"✅ ¡ORDEN EJECUTADA EN BINANCE! ID: {order.get('orderId')}")
 
-            # 6. Colocar Stop Loss con Blindaje (Reintentos + Fallback + Aborto)
+            # 6. Colocar Stop Loss con Blindaje (Reintentos + Fallback con cantidad)
             sl_exitoso, _ = self._colocar_orden_proteccion(
                 symbol=symbol,
                 order_type='STOP_MARKET',
                 trigger_price_str=sl_price_str,
+                quantity_str=quantity_str,
                 max_retries=3
             )
 
@@ -211,6 +199,7 @@ class OrderManager:
                 symbol=symbol,
                 order_type='TAKE_PROFIT_MARKET',
                 trigger_price_str=tp_price_str,
+                quantity_str=quantity_str,
                 max_retries=3
             )
 
