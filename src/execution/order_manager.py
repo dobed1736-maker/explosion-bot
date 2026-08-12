@@ -35,7 +35,6 @@ class OrderManager:
                     tick_size = float(f['tickSize'])
 
         def contar_decimales(valor):
-            # Formatear como flotante fijo para evitar problemas con notación científica (1e-05)
             s = f"{valor:.10f}".rstrip('0')
             if '.' in s:
                 partes = s.split('.')
@@ -47,9 +46,74 @@ class OrderManager:
 
         return prec_qty, prec_price
 
+    def _colocar_orden_proteccion(self, symbol, order_type, trigger_price, max_retries=3):
+        """
+        Intenta colocar orden de proteccion (SL o TP) con reintentos y fallback de endpoints.
+        """
+        for intento in range(1, max_retries + 1):
+            try:
+                # Intento A: Orden de Futuros estándar (STOP_MARKET / TAKE_PROFIT_MARKET)
+                res = self.client.futures_create_order(
+                    symbol=symbol,
+                    side='SELL',
+                    type=order_type,
+                    stopPrice=str(trigger_price),
+                    closePosition='true',
+                    workingType='MARK_PRICE'
+                )
+                return True, res
+            except Exception as e1:
+                # Intento B: Fallback al endpoint de Algo Orders si falla el estándar
+                try:
+                    if hasattr(self.client, 'futures_place_algo_order'):
+                        res = self.client.futures_place_algo_order(
+                            symbol=symbol,
+                            side='SELL',
+                            type=order_type,
+                            triggerPrice=str(trigger_price),
+                            closePosition='TRUE',
+                            workingType='MARK_PRICE'
+                        )
+                    else:
+                        res = self.client._request_api(
+                            'post', 'fapi/v1/algo/order',
+                            data={
+                                'symbol': symbol,
+                                'side': 'SELL',
+                                'type': order_type,
+                                'triggerPrice': str(trigger_price),
+                                'closePosition': 'TRUE',
+                                'workingType': 'MARK_PRICE'
+                            },
+                            signed=True
+                        )
+                    return True, res
+                except Exception as e2:
+                    print(f"   └─ ⚠️ [INTENTO {intento}/{max_retries}] Error enviando {order_type} en {symbol}: {e2}")
+                    time.sleep(1.5)
+
+        return False, None
+
+    def _aborto_emergencia(self, symbol, quantity):
+        """Cierra la posición inmediatamente a mercado si el SL no pudo colocarse."""
+        print(f"\n🚨 [EMERGENCIA] Imposible colocar Stop Loss. Cerrando posición en {symbol} a mercado...")
+        try:
+            close_order = self.client.futures_create_order(
+                symbol=symbol,
+                side='SELL',
+                type='MARKET',
+                quantity=quantity,
+                reduceOnly='true'
+            )
+            print(f"🛑 Posición en {symbol} CERRADA POR SEGURIDAD. ID: {close_order.get('orderId')}")
+            return True
+        except Exception as e:
+            print(f"☠️ [CRÍTICO] Fallo al cerrar posición de emergencia en {symbol}: {e}")
+            return False
+
     def ejecutar_orden_compra(self, symbol, precio_entrada, stop_loss, take_profit, margen_usdt=20, apalancamiento=5):
         """
-        Ejecuta una orden de COMPRA (LONG) a mercado y configura SL / TP
+        Ejecuta una orden de COMPRA (LONG) a mercado y configura SL / TP blindados.
         """
         try:
             print(f"\n🚀 [ORDER MANAGER] Iniciando orden LONG para {symbol}...")
@@ -70,9 +134,9 @@ class OrderManager:
                 self.client.futures_change_margin_type(symbol=symbol, marginType='ISOLATED')
                 print("   └─ Tipo de margen: ISOLATED")
             except Exception:
-                pass # Si ya está en ISOLATED ignora el aviso
+                pass 
 
-            # 3. Obtener precisión exacta de la moneda (Cantidad y Precio)
+            # 3. Obtener precisión exacta
             info = self.client.futures_exchange_info()
             symbol_info = next((item for item in info.get('symbols', []) if item['symbol'] == symbol), None)
             
@@ -82,7 +146,7 @@ class OrderManager:
 
             prec_qty, prec_price = self._obtener_precisiones(symbol_info)
 
-            # 4. Calcular cantidad basada en $20 USD * 5x = $100 USD de posición
+            # 4. Calcular cantidad
             notional_total = margen_usdt * apalancamiento
             precio_ref = float(self.client.futures_symbol_ticker(symbol=symbol)['price'])
             raw_quantity = notional_total / precio_ref
@@ -91,7 +155,6 @@ class OrderManager:
             if prec_qty == 0:
                 quantity = int(quantity)
 
-            # Formatear Stop Loss y Take Profit a los decimales permitidos
             sl_price_formatted = round(float(stop_loss), prec_price)
             tp_price_formatted = round(float(take_profit), prec_price)
             if prec_price == 0:
@@ -109,61 +172,33 @@ class OrderManager:
             )
             print(f"✅ ¡ORDEN EJECUTADA EN BINANCE! ID: {order.get('orderId')}")
 
-            # 6. Colocar Stop Loss Automático (Usando Algo Order Endpoint)
-            try:
-                if hasattr(self.client, 'futures_place_algo_order'):
-                    sl_order = self.client.futures_place_algo_order(
-                        symbol=symbol,
-                        side='SELL',
-                        type='STOP_MARKET',
-                        triggerPrice=str(sl_price_formatted),
-                        closePosition='TRUE',
-                        workingType='MARK_PRICE'
-                    )
-                else:
-                    sl_order = self.client._request_api(
-                        'post', 'fapi/v1/algo/order',
-                        data={
-                            'symbol': symbol,
-                            'side': 'SELL',
-                            'type': 'STOP_MARKET',
-                            'triggerPrice': str(sl_price_formatted),
-                            'closePosition': 'TRUE',
-                            'workingType': 'MARK_PRICE'
-                        },
-                        signed=True
-                    )
-                print(f"   └─ 🛑 Stop Loss fijado en: ${sl_price_formatted}")
-            except Exception as e_sl:
-                print(f"   └─ ❌ Error al colocar SL: {e_sl}")
+            # 6. Colocar Stop Loss con Blindaje (Reintentos + Fallback + Aborto)
+            sl_exitoso, _ = self._colocar_orden_proteccion(
+                symbol=symbol,
+                order_type='STOP_MARKET',
+                trigger_price=sl_price_formatted,
+                max_retries=3
+            )
 
-            # 7. Colocar Take Profit Automático (Usando Algo Order Endpoint)
-            try:
-                if hasattr(self.client, 'futures_place_algo_order'):
-                    tp_order = self.client.futures_place_algo_order(
-                        symbol=symbol,
-                        side='SELL',
-                        type='TAKE_PROFIT_MARKET',
-                        triggerPrice=str(tp_price_formatted),
-                        closePosition='TRUE',
-                        workingType='MARK_PRICE'
-                    )
-                else:
-                    tp_order = self.client._request_api(
-                        'post', 'fapi/v1/algo/order',
-                        data={
-                            'symbol': symbol,
-                            'side': 'SELL',
-                            'type': 'TAKE_PROFIT_MARKET',
-                            'triggerPrice': str(tp_price_formatted),
-                            'closePosition': 'TRUE',
-                            'workingType': 'MARK_PRICE'
-                        },
-                        signed=True
-                    )
+            if sl_exitoso:
+                print(f"   └─ 🛑 Stop Loss fijado en: ${sl_price_formatted}")
+            else:
+                # SI EL SL FALLA 3 VECES, ABORTA LA POSICIÓN
+                self._aborto_emergencia(symbol, quantity)
+                return None
+
+            # 7. Colocar Take Profit con Reintentos
+            tp_exitoso, _ = self._colocar_orden_proteccion(
+                symbol=symbol,
+                order_type='TAKE_PROFIT_MARKET',
+                trigger_price=tp_price_formatted,
+                max_retries=3
+            )
+
+            if tp_exitoso:
                 print(f"   └─ 🎯 Take Profit 1 fijado en: ${tp_price_formatted}")
-            except Exception as e_tp:
-                print(f"   └─ ❌ Error al colocar TP: {e_tp}")
+            else:
+                print(f"   └─ ⚠️ No se pudo fijar TP1 en {symbol}, pero la posición sigue protegida con Stop Loss.")
 
             return order
 
@@ -172,5 +207,4 @@ class OrderManager:
             return None
         except Exception as e:
             print(f"❌ Error inesperado en OrderManager para {symbol}: {e}")
-            return None    
-        
+            return None
