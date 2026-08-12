@@ -30,6 +30,13 @@ from config.settings import (
 
 from src.features.indicators import calcular_ultimo_valor
 
+# ============================================================
+# 🚫 LISTA NEGRA DE SÍMBOLOS EXCLUIDOS (TradFi / Contratos Especiales)
+# ============================================================
+EXCLUDED_SYMBOLS = [
+    "SPCXUSDT",  # Requiere contrato TradFi-Perps en Binance
+]
+
 
 # ============================================================
 # FILTROS BASE INDIVIDUALES
@@ -95,6 +102,12 @@ def aplicar_todos_los_filtros(df, symbol, ganador_info, book_imbalance, funding_
         'max_puntos': 0
     }
     
+    # ⛔ Filtrar símbolos excluidos
+    if symbol in EXCLUDED_SYMBOLS:
+        resultados['pasa_todos'] = False
+        resultados['razon'] = f"Símbolo {symbol} en lista negra (Excluido)."
+        return resultados
+
     # ============================================================
     # 🎯 5 FILTROS OBLIGATORIOS (Los pesos pesados)
     # ============================================================
@@ -168,6 +181,9 @@ def pasar_filtros(df, symbol=""):
     Evaluación rápida de un dataframe individual para verificar
     si cumple con la estructura mínima para pasar al modelo.
     """
+    if symbol in EXCLUDED_SYMBOLS:
+        return False
+
     if df is None or df.empty or len(df) < 30:
         return False
     return True
@@ -186,6 +202,9 @@ def obtener_candidatos(datos_monedas, df_btc=None):
         btc_cambio = ((df_btc['close'].iloc[-1] - df_btc['close'].iloc[0]) / df_btc['close'].iloc[0]) * 100
 
     for symbol, df in datos_monedas.items():
+        if symbol in EXCLUDED_SYMBOLS:
+            continue
+
         if df is None or df.empty:
             continue
             
