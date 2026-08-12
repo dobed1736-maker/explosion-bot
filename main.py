@@ -1,5 +1,5 @@
 # ============================================================
-# BOT DE MOMENTUM - PUNTO DE ENTRADA CON ESCÁNER DINÁMICO
+# BOT DE MOMENTUM - PUNTO DE ENTRADA CON ESCÁNER DINÁMICO (MEM-OPTIMIZED)
 # ============================================================
 
 import sys
@@ -128,8 +128,8 @@ class BotMomentumDinamico:
 
     def monitorear_posiciones_abiertas(self):
         """
-        Consulta en PostgreSQL las operaciones en estado 'EJECUTADA' o 'PENDIENTE' con orden activa,
-        revisa en Binance si ya se cerraron por TP o SL y actualiza su estado a GANADA/PERDIDA.
+        Consulta en PostgreSQL las operaciones en estado 'EJECUTADA' o 'PENDIENTE' con orden activa.
+        Garantiza cierre de conexión BD en todo escenario.
         """
         if not get_connection or not actualizar_estado_senal:
             return
@@ -147,7 +147,6 @@ class BotMomentumDinamico:
             """)
             posiciones_activas = cursor.fetchall()
             cursor.close()
-            conn.close()
 
             if not posiciones_activas:
                 return
@@ -156,7 +155,6 @@ class BotMomentumDinamico:
 
             for id_db, symbol, precio_entrada in posiciones_activas:
                 try:
-                    # Consultar si hay posición abierta en Binance Futuros para esta moneda
                     pos_info = self.ordenes.client.futures_position_information(symbol=symbol)
                     pos_amount = 0.0
                     for p in pos_info:
@@ -164,9 +162,7 @@ class BotMomentumDinamico:
                             pos_amount = float(p.get('positionAmt', 0))
                             break
 
-                    # Si la posición está en 0, significa que se cerró (tocó TP, SL o Cierre Manual)
                     if pos_amount == 0:
-                        # Consultar últimos trades de la moneda para calcular PnL real
                         trades = self.ordenes.client.futures_account_trades(symbol=symbol, limit=5)
                         pnl_acumulado = 0.0
                         ultimo_precio_salida = precio_entrada
@@ -190,6 +186,12 @@ class BotMomentumDinamico:
 
         except Exception as e:
             print(f"⚠️ Error en monitoreo general de posiciones: {e}")
+        finally:
+            # 🔒 GARANTIZAR CIERRE DE CONEXIÓN POSTGRESQL SIEMPRE
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def ejecutar(self):
         print("\n🔎 ESCANEANDO GANADORES DEL MERCADO (TOP GAINERS)...")
@@ -293,10 +295,8 @@ class BotMomentumDinamico:
                     msg_exito = f"🚀 ¡COMPRA EJECUTADA EN {symbol}!\nPrecio: ${precio_in} | Probabilidad: {prob*100:.1f}%\nSL: ${sl} | TP1: ${tp1}"
                     print(f"\n{msg_exito}")
                     
-                    # Logs locales
                     log_senal(symbol, "COMPRA", prob, precio_in)
 
-                    # Notificación Telegram formateada
                     if enviar_señal_telegram:
                         try:
                             enviar_señal_telegram(
@@ -312,7 +312,6 @@ class BotMomentumDinamico:
                         except Exception as e_tg:
                             print(f"⚠️ No se pudo enviar notificación a Telegram: {e_tg}")
 
-                    # Ejecutar orden en Binance
                     self.ordenes.ejecutar_orden_compra(
                         symbol=symbol,
                         precio_entrada=precio_in,
@@ -326,11 +325,13 @@ class BotMomentumDinamico:
             self.monitorear_posiciones_abiertas()
 
         finally:
-            # 🧹 LIMPIEZA DE MEMORIA RAM TRAS CADA EJECUCIÓN (Previene reinicios en Render)
+            # 🧹 LIMPIEZA AGRESIVA DE MEMORIA RAM TRAS CADA EJECUCIÓN
+            datos_monedas.clear()
+            candidatos.clear()
             del datos_monedas
             del df_btc
             del candidatos
-            gc.collect()
+            gc.collect()  # Forzar barrido del garbage collector
 
 
 if __name__ == "__main__":
@@ -345,6 +346,8 @@ if __name__ == "__main__":
     try:
         while True:
             bot.ejecutar()
+            # Vaciar caché extra del motor gc en el bucle principal
+            gc.collect()
             print(f"\n⏳ Próximo rastreo en {INTERVALO_EJECUCION} segundos...")
             time.sleep(INTERVALO_EJECUCION)
     except KeyboardInterrupt:
