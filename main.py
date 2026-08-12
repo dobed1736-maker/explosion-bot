@@ -5,6 +5,7 @@
 import sys
 import os
 import time
+import gc  # 🧹 Recolector de basura para liberar memoria RAM en Render
 from datetime import datetime
 import pandas as pd
 
@@ -101,6 +102,8 @@ class BotMomentumDinamico:
             
             self.modelo_xgb.entrenar(df_total)
             self.modelo_xgb.guardar()
+            del df_total
+            gc.collect()
         except Exception as e:
             print(f"❌ Error entrenando modelo XGBoost: {e}")
             log_error("Error entrenando modelo XGBoost", e)
@@ -117,6 +120,8 @@ class BotMomentumDinamico:
             
             self.modelo_lstm.entrenar(df_total, epochs=25)
             self.modelo_lstm.guardar()
+            del df_total
+            gc.collect()
         except Exception as e:
             print(f"❌ Error entrenando modelo LSTM: {e}")
             log_error("Error entrenando modelo LSTM", e)
@@ -191,130 +196,142 @@ class BotMomentumDinamico:
         print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("-"*60)
         
-        # 1. Escanear top ganadores
-        monedas_top = self.client_ws.escanear_top_ganadores()
-        
-        if not monedas_top:
-            print("⚠️ No hay altcoins en rango de explosión actualmente.")
-            self.monitorear_posiciones_abiertas()
-            return
-
-        print(f"📋 Monedas analizadas en esta ronda ({len(monedas_top)}):")
-        print(", ".join(monedas_top[:15]) + "..." if len(monedas_top) > 15 else ", ".join(monedas_top))
-
-        # 2. Conectar WebSocket a las ganadoras
-        self.client_ws.actualizar_conector_websocket(monedas_top)
-        time.sleep(2)  # Sincronizar buffer RAM
-
-        # 3. Leer velas en directo y calcular indicadores
         datos_monedas = {}
-        for symbol in monedas_top:
-            df = self.client_ws.obtener_velas(symbol)
-            if not df.empty and len(df) >= 30:
-                df = calcular_todos_indicadores(df)
-                datos_monedas[symbol] = df
+        df_btc = None
+        candidatos = []
 
-        df_btc = self.client_ws.obtener_velas('BTCUSDT')
-        if not df_btc.empty and len(df_btc) >= 30:
-            df_btc = calcular_todos_indicadores(df_btc)
-
-        # 4. Filtrar candidatas
-        print("\n🎯 FILTRANDO EXPLOSIONES REALES CON IA...")
-        candidatos = obtener_candidatos(datos_monedas, df_btc)
-
-        if not candidatos:
-            print("\n⚠️ Ningún ganador superó los filtros estrictos de confirmación.")
-            self.monitorear_posiciones_abiertas()
-            return
-
-        # 5. Generar señales y ejecutar compras
-        for candidato in candidatos:
-            symbol = candidato['symbol']
-            df = candidato['df']
+        try:
+            # 1. Escanear top ganadores
+            monedas_top = self.client_ws.escanear_top_ganadores()
             
-            precio_actual = float(df['close'].iloc[-1])
-            print(f"\n🔍 Evaluando candidato: {symbol} | Precio actual: ${precio_actual}")
-            
-            resultado = self.generador_senales.generar_senal(df, symbol, precio_actual)
-            
-            if isinstance(resultado, tuple):
-                senal = resultado[0]
-                mensaje = resultado[1]
-            else:
-                senal = resultado
-                mensaje = ""
+            if not monedas_top:
+                print("⚠️ No hay altcoins en rango de explosión actualmente.")
+                self.monitorear_posiciones_abiertas()
+                return
 
-            prob = senal.get('probabilidad', 0)
-            precio_in = senal.get('precio_entrada', precio_actual)
-            sl = senal.get('stop_loss', 0)
-            tp1 = senal.get('take_profit_1', 0)
-            tp2 = senal.get('take_profit_2', 0)
-            tp3 = senal.get('take_profit_3', 0)
-            detalles = senal.get('detalles', {})
+            print(f"📋 Monedas analizadas en esta ronda ({len(monedas_top)}):")
+            print(", ".join(monedas_top[:15]) + "..." if len(monedas_top) > 15 else ", ".join(monedas_top))
 
-            # Extraer probabilidades individuales para guardar en BD
-            prob_xgb = float(detalles.get('XGBoost', '0').replace('%', '')) / 100 if 'XGBoost' in detalles else 0
-            prob_lstm = float(detalles.get('LSTM', '0').replace('%', '')) / 100 if 'LSTM' in detalles else 0
-            prob_stats = float(detalles.get('Régimen', '0').split('%')[0]) / 100 if 'Régimen' in detalles else 0
+            # 2. Conectar WebSocket a las ganadoras
+            self.client_ws.actualizar_conector_websocket(monedas_top)
+            time.sleep(2)  # Sincronizar buffer RAM
 
-            es_compra = senal and senal.get('comprar', False)
-            estado_inicial = 'EJECUTADA' if es_compra else 'PENDIENTE'
+            # 3. Leer velas en directo y calcular indicadores
+            for symbol in monedas_top:
+                df = self.client_ws.obtener_velas(symbol)
+                if not df.empty and len(df) >= 30:
+                    df = calcular_todos_indicadores(df)
+                    datos_monedas[symbol] = df
 
-            # 💾 1. Guardar en PostgreSQL
-            id_db = None
-            if guardar_senal:
-                try:
-                    id_db = guardar_senal(
-                        symbol=symbol,
-                        precio=precio_in,
-                        score=prob,
-                        prob_xgb=prob_xgb,
-                        prob_lstm=prob_lstm,
-                        prob_stats=prob_stats,
-                        sl=sl,
-                        tp1=tp1,
-                        tp2=tp2,
-                        estado=estado_inicial
-                    )
-                except Exception as e_db:
-                    print(f"⚠️ Error al guardar en PostgreSQL: {e_db}")
+            df_btc = self.client_ws.obtener_velas('BTCUSDT')
+            if not df_btc.empty and len(df_btc) >= 30:
+                df_btc = calcular_todos_indicadores(df_btc)
 
-            # 🚀 2. Si supera el umbral, ejecutar compra y notificar
-            if es_compra:
-                msg_exito = f"🚀 ¡COMPRA EJECUTADA EN {symbol}!\nPrecio: ${precio_in} | Probabilidad: {prob*100:.1f}%\nSL: ${sl} | TP1: ${tp1}"
-                print(f"\n{msg_exito}")
+            # 4. Filtrar candidatas
+            print("\n🎯 FILTRANDO EXPLOSIONES REALES CON IA...")
+            candidatos = obtener_candidatos(datos_monedas, df_btc)
+
+            if not candidatos:
+                print("\n⚠️ Ningún ganador superó los filtros estrictos de confirmación.")
+                self.monitorear_posiciones_abiertas()
+                return
+
+            # 5. Generar señales y ejecutar compras
+            for candidato in candidatos:
+                symbol = candidato['symbol']
+                df = candidato['df']
                 
-                # Logs locales
-                log_senal(symbol, "COMPRA", prob, precio_in)
+                precio_actual = float(df['close'].iloc[-1])
+                print(f"\n🔍 Evaluando candidato: {symbol} | Precio actual: ${precio_actual}")
+                
+                resultado = self.generador_senales.generar_senal(df, symbol, precio_actual)
+                
+                if isinstance(resultado, tuple):
+                    senal = resultado[0]
+                    mensaje = resultado[1]
+                else:
+                    senal = resultado
+                    mensaje = ""
 
-                # Notificación Telegram formateada
-                if enviar_señal_telegram:
+                prob = senal.get('probabilidad', 0)
+                precio_in = senal.get('precio_entrada', precio_actual)
+                sl = senal.get('stop_loss', 0)
+                tp1 = senal.get('take_profit_1', 0)
+                tp2 = senal.get('take_profit_2', 0)
+                tp3 = senal.get('take_profit_3', 0)
+                detalles = senal.get('detalles', {})
+
+                # Extraer probabilidades individuales para guardar en BD
+                prob_xgb = float(detalles.get('XGBoost', '0').replace('%', '')) / 100 if 'XGBoost' in detalles else 0
+                prob_lstm = float(detalles.get('LSTM', '0').replace('%', '')) / 100 if 'LSTM' in detalles else 0
+                prob_stats = float(detalles.get('Régimen', '0').split('%')[0]) / 100 if 'Régimen' in detalles else 0
+
+                es_compra = senal and senal.get('comprar', False)
+                estado_inicial = 'EJECUTADA' if es_compra else 'PENDIENTE'
+
+                # 💾 1. Guardar en PostgreSQL
+                id_db = None
+                if guardar_senal:
                     try:
-                        enviar_señal_telegram(
+                        id_db = guardar_senal(
                             symbol=symbol,
-                            tipo="COMPRA",
-                            probabilidad=prob,
                             precio=precio_in,
+                            score=prob,
+                            prob_xgb=prob_xgb,
+                            prob_lstm=prob_lstm,
+                            prob_stats=prob_stats,
+                            sl=sl,
                             tp1=tp1,
                             tp2=tp2,
-                            tp3=tp3,
-                            sl=sl
+                            estado=estado_inicial
                         )
-                    except Exception as e_tg:
-                        print(f"⚠️ No se pudo enviar notificación a Telegram: {e_tg}")
+                    except Exception as e_db:
+                        print(f"⚠️ Error al guardar en PostgreSQL: {e_db}")
 
-                # Ejecutar orden en Binance
-                self.ordenes.ejecutar_orden_compra(
-                    symbol=symbol,
-                    precio_entrada=precio_in,
-                    stop_loss=sl,
-                    take_profit=tp1
-                )
-            else:
-                print(f"⏸️ {symbol}: {mensaje}")
+                # 🚀 2. Si supera el umbral, ejecutar compra y notificar
+                if es_compra:
+                    msg_exito = f"🚀 ¡COMPRA EJECUTADA EN {symbol}!\nPrecio: ${precio_in} | Probabilidad: {prob*100:.1f}%\nSL: ${sl} | TP1: ${tp1}"
+                    print(f"\n{msg_exito}")
+                    
+                    # Logs locales
+                    log_senal(symbol, "COMPRA", prob, precio_in)
 
-        # 6. Monitorear cierres de posiciones tras escanear
-        self.monitorear_posiciones_abiertas()
+                    # Notificación Telegram formateada
+                    if enviar_señal_telegram:
+                        try:
+                            enviar_señal_telegram(
+                                symbol=symbol,
+                                tipo="COMPRA",
+                                probabilidad=prob,
+                                precio=precio_in,
+                                tp1=tp1,
+                                tp2=tp2,
+                                tp3=tp3,
+                                sl=sl
+                            )
+                        except Exception as e_tg:
+                            print(f"⚠️ No se pudo enviar notificación a Telegram: {e_tg}")
+
+                    # Ejecutar orden en Binance
+                    self.ordenes.ejecutar_orden_compra(
+                        symbol=symbol,
+                        precio_entrada=precio_in,
+                        stop_loss=sl,
+                        take_profit=tp1
+                    )
+                else:
+                    print(f"⏸️ {symbol}: {mensaje}")
+
+            # 6. Monitorear cierres de posiciones tras escanear
+            self.monitorear_posiciones_abiertas()
+
+        finally:
+            # 🧹 LIMPIEZA DE MEMORIA RAM TRAS CADA EJECUCIÓN (Previene reinicios en Render)
+            del datos_monedas
+            del df_btc
+            del candidatos
+            gc.collect()
+
 
 if __name__ == "__main__":
     os.makedirs("data/raw", exist_ok=True)
