@@ -48,7 +48,8 @@ class BinanceDynamicWSClient:
         self.client_rest = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY, **client_kwargs)
         self.twm = None
         self.velas_memoria = {}
-        self.sockets_activos = set()
+        # AHORA ES UN DICCIONARIO PARA GUARDAR EL ID DE CONEXIÓN
+        self.sockets_activos = {} 
 
     def escanear_top_ganadores(self):
         """Escanea Binance Futures buscando monedas en pleno PUMP (5% a 50%)"""
@@ -122,27 +123,29 @@ class BinanceDynamicWSClient:
                         df.iat[-1, df.columns.get_loc(col)] = nueva_vela[col]
                 else:
                     df = pd.concat([df, pd.DataFrame([nueva_vela])], ignore_index=True)
-                    # 🧹 MANTENER SOLO ÚLTIMAS 100 VELAS (En lugar de 300 para ahorrar RAM)
                     if len(df) > 100:
                         df = df.iloc[-100:].reset_index(drop=True)
                 self.velas_memoria[symbol] = df
 
     def actualizar_conector_websocket(self, simbolos):
-        """Abre y reinicia streaming WebSocket garantizando purga de monedas obsoletas"""
-        # Asegurar BTCUSDT para el filtro de mercado
+        """Abre y reinicia streaming WebSocket garantizando CERRAR los hilos de monedas obsoletas"""
         simbolos_actuales = set(simbolos)
         simbolos_actuales.add('BTCUSDT')
 
-        # 🧹 1. PURGA DE MEMORIA: Eliminar monedas viejas que ya no están en el Top
-        monedas_a_remover = self.sockets_activos - simbolos_actuales
+        # 🧹 1. MATAR HILOS DE WEBSOCKET VIEJOS
+        monedas_a_remover = list(set(self.sockets_activos.keys()) - simbolos_actuales)
         if monedas_a_remover:
-            print(f"🧹 Purgando {len(monedas_a_remover)} monedas fuera de rango de la RAM...")
+            print(f"🧹 Destruyendo {len(monedas_a_remover)} conexiones (hilos) viejas para liberar RAM...")
             for symbol in monedas_a_remover:
+                conn_key = self.sockets_activos.pop(symbol, None)
+                if conn_key and self.twm:
+                    try:
+                        self.twm.stop_socket(conn_key) # 🔥 ESTO ES LO QUE MATARÁ LA FUGA DE MEMORIA
+                    except Exception as e:
+                        print(f"⚠️ Aviso al cerrar socket de {symbol}: {e}")
                 self.velas_memoria.pop(symbol, None)
-                self.sockets_activos.discard(symbol)
             gc.collect()
 
-        # 2. Inicializar o reiniciar ThreadedWebsocketManager si creció mucho
         if self.twm is None:
             self.twm = ThreadedWebsocketManager(
                 api_key=BINANCE_API_KEY,
@@ -151,7 +154,7 @@ class BinanceDynamicWSClient:
             )
             self.twm.start()
 
-        # 3. Conectar solo las monedas nuevas
+        # 2. Conectar solo las monedas nuevas y GUARDAR EL ID DE CONEXIÓN (conn_key)
         for symbol in simbolos_actuales:
             if symbol not in self.sockets_activos:
                 self.velas_memoria[symbol] = self._cargar_historial_inicial(symbol, limit=100)
@@ -159,12 +162,13 @@ class BinanceDynamicWSClient:
                 time.sleep(0.15)
                 
                 try:
-                    self.twm.start_kline_futures_socket(
+                    conn_key = self.twm.start_kline_futures_socket(
                         callback=self._procesar_mensaje_kline,
                         symbol=symbol,
                         interval=TIMEFRAME
                     )
-                    self.sockets_activos.add(symbol)
+                    if conn_key:
+                        self.sockets_activos[symbol] = conn_key # Guardar ID para poder matarlo luego
                 except Exception as e_ws:
                     print(f"⚠️ Error conectando socket para {symbol}: {e_ws}")
 
@@ -178,7 +182,6 @@ class BinanceDynamicWSClient:
             except Exception:
                 pass
             print("🛑 WebSockets detenidos.")
-
 
 _cliente_ws = None
 
