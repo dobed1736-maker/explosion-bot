@@ -72,29 +72,49 @@ class OrderManager:
     return f'{cant_ajustada:f}'
 
   def _colocar_orden_proteccion(
-      self,
-      symbol,
-      order_type,
-      trigger_price_str,
-      quantity_str,
-      side='SELL',
-      max_retries=3,
-  ):
-    """Intenta colocar orden de protección (SL o TP).
+        self,
+        symbol,
+        order_type,
+        trigger_price_str,
+        quantity_str,
+        side='SELL',
+        max_retries=3,
+    ):
+      """Coloca la orden de protección Stop Loss o Take Profit vinculada a la posición."""
+      # Mapeo de tipo de orden para la API tradicional de posición
+      tipo_orden = (
+          'STOP_MARKET'
+          if order_type in ['STOP_MARKET', 'STOP_LOSS']
+          else 'TAKE_PROFIT_MARKET'
+      )
 
-    Aplica Algo Order API universalmente para erradicar el error -4120 tanto en
-    Testnet como en Producción.
-    """
-    algo_type = (
-        'STOP_MARKET'
-        if order_type in ['STOP_MARKET', 'STOP_LOSS']
-        else 'TAKE_PROFIT_MARKET'
-    )
+      for intento in range(1, max_retries + 1):
+        # METODO 1: Crear orden condicional directamente ligada a la posición
+        try:
+          params = {
+              'symbol': symbol,
+              'side': side,
+              'type': tipo_orden,
+              'stopPrice': trigger_price_str,
+              'closePosition': 'true',  # Esto es lo que vincula el casillero TP/SL
+              'workingType': 'MARK_PRICE',
+          }
+          res = self.client.futures_create_order(**params)
+          print(
+              f'✅ [PROTECCIÓN EXITOSA] {tipo_orden} vinculado a la posición'
+              f' en {trigger_price_str}'
+          )
+          return True, res
+        except Exception as e1:
+          print(f'⚠️ [Intento {intento} Método 1] Error: {e1}')
 
-    for intento in range(1, max_retries + 1):
-      # INTENTO 1: Algo Order API vía SDK (futures_place_algo_order)
-      try:
-        if hasattr(self.client, 'futures_place_algo_order'):
+        # METODO 2: Algo Order API (Fallback si el Método 1 es rechazado por el exchange)
+        try:
+          algo_type = (
+              'STOP_MARKET'
+              if order_type in ['STOP_MARKET', 'STOP_LOSS']
+              else 'TAKE_PROFIT_MARKET'
+          )
           res = self.client.futures_place_algo_order(
               symbol=symbol,
               side=side,
@@ -103,54 +123,22 @@ class OrderManager:
               closePosition='true',
               workingType='MARK_PRICE',
           )
-          return True, res
-      except Exception:
-        pass
-
-      # INTENTO 2: Directo a /fapi/v1/algo/order con closePosition
-      try:
-        params = {
-            'symbol': symbol,
-            'side': side,
-            'type': algo_type,
-            'triggerPrice': trigger_price_str,
-            'closePosition': 'true',
-            'workingType': 'MARK_PRICE',
-        }
-        if hasattr(self.client, '_request_futures_api'):
-          res = self.client._request_futures_api(
-              'post', 'algo/order', signed=True, data=params
+          print(
+              f'✅ [PROTECCIÓN EXITOSA - ALGO] {algo_type} en'
+              f' {trigger_price_str}'
           )
           return True, res
-        elif hasattr(self.client, '_request_api'):
-          res = self.client._request_api(
-              'post', 'fapi/v1/algo/order', signed=True, data=params
-          )
-          return True, res
-      except Exception:
-        pass
+        except Exception as e2:
+          print(f'⚠️ [Intento {intento} Método 2] Error: {e2}')
 
-      # INTENTO 3: Endpoint clásico (Fallback para entornos antiguos)
-      try:
-        res = self.client.futures_create_order(
-            symbol=symbol,
-            side=side,
-            type=algo_type,
-            stopPrice=trigger_price_str,
-            closePosition='true',
-            workingType='MARK_PRICE',
-        )
-        return True, res
-      except Exception as e_err:
-        print(
-            f'    └─ ⚠️ [Intento {intento}/{max_retries}] Error en'
-            f' {symbol}: {e_err}'
-        )
+        time.sleep(1.0)
 
-      time.sleep(1.0 * intento)
-
-    return False, None
-
+      print(
+          f'❌ [ERROR FATAL] No se pudo colocar {order_type} tras'
+          f' {max_retries} intentos.'
+      )
+      return False, None
+  
   def _aborto_emergencia(self, symbol, quantity_str):
     """Cierra la posición inmediatamente a mercado si el SL no pudo colocarse."""
     print(
