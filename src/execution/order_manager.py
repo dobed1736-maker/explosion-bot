@@ -59,37 +59,56 @@ class OrderManager:
 
     def _colocar_orden_proteccion(self, symbol, order_type, trigger_price_str, quantity_str, max_retries=3):
         """
-        Intenta colocar orden de protección (SL o TP) utilizando closePosition='true'.
-        Si falla, realiza fallback enviando la cantidad explícita con reduceOnly.
+        Intenta colocar orden de protección (SL o TP).
+        Soporta los endpoints estándar, el endpoint de Algo Orders de Binance (Error -4120) 
+        y el tipo de orden STOP/TAKE_PROFIT como respaldo.
         """
         for intento in range(1, max_retries + 1):
+            # 1. Intentar usando el Endpoint de Algo Orders de Binance (Nueva API de Futuros)
             try:
-                # Método 1: Cierre total explícito con string 'true'
-                res = self.client.futures_create_order(
+                algo_type = 'STOP_LOSS' if order_type == 'STOP_MARKET' else 'TAKE_PROFIT'
+                res = self.client.futures_place_algo_order(
                     symbol=symbol,
                     side='SELL',
-                    type=order_type,
-                    stopPrice=trigger_price_str,
+                    type=algo_type,
+                    triggerPrice=trigger_price_str,
                     closePosition='true',
                     workingType='MARK_PRICE'
                 )
                 return True, res
-            except Exception as e1:
+            except Exception as e_algo:
+                # 2. Si falla Algo Order, intentar futures_create_algo_order (nombre alternativo de wrapper)
                 try:
-                    # Método 2: Fallback con cantidad exacta y reduceOnly=True (booleano)
-                    res = self.client.futures_create_order(
+                    algo_type = 'STOP_LOSS' if order_type == 'STOP_MARKET' else 'TAKE_PROFIT'
+                    res = self.client.futures_create_algo_order(
                         symbol=symbol,
                         side='SELL',
-                        type=order_type,
-                        stopPrice=trigger_price_str,
-                        quantity=quantity_str,
-                        reduceOnly=True,
+                        type=algo_type,
+                        triggerPrice=trigger_price_str,
+                        closePosition='true',
                         workingType='MARK_PRICE'
                     )
                     return True, res
-                except Exception as e2:
-                    print(f"    └─ ⚠️ [INTENTO {intento}/{max_retries}] Error enviando {order_type} en {symbol}: {e2}")
-                    time.sleep(1.0)
+                except Exception:
+                    # 3. Método Fallback: Utilizar tipo 'STOP' o 'TAKE_PROFIT' con precio
+                    try:
+                        fallback_type = 'STOP' if order_type == 'STOP_MARKET' else 'TAKE_PROFIT'
+                        res = self.client.futures_create_order(
+                            symbol=symbol,
+                            side='SELL',
+                            type=fallback_type,
+                            stopPrice=trigger_price_str,
+                            price=trigger_price_str,
+                            quantity=quantity_str,
+                            reduceOnly=True,
+                            workingType='MARK_PRICE'
+                        )
+                        return True, res
+                    except Exception as e_fallback:
+                        print(f"    └─ ⚠️ [INTENTO {intento}/{max_retries}] Error enviando {order_type} en {symbol}: {e_fallback}")
+                        time.sleep(1.0)
+
+        return False, None
 
         return False, None
 
