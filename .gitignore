@@ -1,0 +1,16 @@
+# Archivos de configuración y claves
+.env
+*.env
+
+# Archivos temporales de Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Entornos virtuales
+venv/
+.venv/
+
+# Configuración de editor
+.vscode/
+.idea/
