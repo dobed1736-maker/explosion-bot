@@ -2,13 +2,14 @@
 # CLIENTE BINANCE - CAZADOR DINÁMICO DE GANADORES + WEBSOCKETS (MEM-OPTIMIZED)
 # ============================================================
 
-import pandas as pd
-import time
-import sys
 import os
+import sys
+import time
 import gc
+import pandas as pd
 from binance import ThreadedWebsocketManager
 from binance.client import Client
+from binance.exceptions import BinanceAPIException
 
 DIRECTORIO_RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if DIRECTORIO_RAIZ not in sys.path:
@@ -48,7 +49,6 @@ class BinanceDynamicWSClient:
         self.client_rest = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY, **client_kwargs)
         self.twm = None
         self.velas_memoria = {}
-        # AHORA ES UN DICCIONARIO PARA GUARDAR EL ID DE CONEXIÓN
         self.sockets_activos = {} 
 
     def escanear_top_ganadores(self):
@@ -81,26 +81,39 @@ class BinanceDynamicWSClient:
             print(f"❌ Error escaneando top ganadores: {e}")
             return []
 
-    def _cargar_historial_inicial(self, symbol, limit=100):
-        try:
-            klines = self.client_rest.futures_klines(symbol=symbol, interval=TIMEFRAME, limit=limit)
-            df = pd.DataFrame(klines, columns=[
-                'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_asset_volume', 'number_of_trades',
-                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-            ])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            
-            columnas_num = [
-                'open', 'high', 'low', 'close', 'volume',
-                'quote_asset_volume', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume'
-            ]
-            df[columnas_num] = df[columnas_num].astype(float)
-            
-            return df
-        except Exception as e:
-            print(f"❌ Error cargando historial de {symbol}: {e}")
-            return pd.DataFrame()
+    def _cargar_historial_inicial(self, symbol, limit=100, max_reintentos=3):
+        """Carga el historial inicial vía REST con reintento automático ante Rate Limit (-1003)"""
+        for intento in range(max_reintentos):
+            try:
+                klines = self.client_rest.futures_klines(symbol=symbol, interval=TIMEFRAME, limit=limit)
+                df = pd.DataFrame(klines, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'quote_asset_volume', 'number_of_trades',
+                    'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+                ])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                
+                columnas_num = [
+                    'open', 'high', 'low', 'close', 'volume',
+                    'quote_asset_volume', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume'
+                ]
+                df[columnas_num] = df[columnas_num].astype(float)
+                
+                return df
+
+            except BinanceAPIException as e:
+                if e.code == -1003:  # Rate Limit Exceeded
+                    tiempo_espera = (intento + 1) * 2  # 2s, 4s...
+                    print(f"⚠️ Rate limit (-1003) en {symbol}. Reintentando en {tiempo_espera}s... ({intento + 1}/{max_reintentos})")
+                    time.sleep(tiempo_espera)
+                else:
+                    print(f"❌ Error de API Binance en {symbol}: {e}")
+                    break
+            except Exception as e:
+                print(f"❌ Error inesperado cargando historial de {symbol}: {e}")
+                break
+
+        return pd.DataFrame()
         
     def _procesar_mensaje_kline(self, msg):
         if msg.get('e') == 'kline':
@@ -140,7 +153,7 @@ class BinanceDynamicWSClient:
                 conn_key = self.sockets_activos.pop(symbol, None)
                 if conn_key and self.twm:
                     try:
-                        self.twm.stop_socket(conn_key) # 🔥 ESTO ES LO QUE MATARÁ LA FUGA DE MEMORIA
+                        self.twm.stop_socket(conn_key)
                     except Exception as e:
                         print(f"⚠️ Aviso al cerrar socket de {symbol}: {e}")
                 self.velas_memoria.pop(symbol, None)
@@ -154,7 +167,7 @@ class BinanceDynamicWSClient:
             )
             self.twm.start()
 
-        # 2. Conectar solo las monedas nuevas y GUARDAR EL ID DE CONEXIÓN (conn_key)
+        # 2. Conectar solo las monedas nuevas y GUARDAR EL ID DE CONEXIÓN
         for symbol in simbolos_actuales:
             if symbol not in self.sockets_activos:
                 self.velas_memoria[symbol] = self._cargar_historial_inicial(symbol, limit=100)
@@ -168,7 +181,7 @@ class BinanceDynamicWSClient:
                         interval=TIMEFRAME
                     )
                     if conn_key:
-                        self.sockets_activos[symbol] = conn_key # Guardar ID para poder matarlo luego
+                        self.sockets_activos[symbol] = conn_key
                 except Exception as e_ws:
                     print(f"⚠️ Error conectando socket para {symbol}: {e_ws}")
 
