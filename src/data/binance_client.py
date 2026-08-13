@@ -1,11 +1,12 @@
 # ============================================================
-# CLIENTE BINANCE - CAZADOR DINÁMICO DE GANADORES + WEBSOCKETS
+# CLIENTE BINANCE - CAZADOR DINÁMICO DE GANADORES + WEBSOCKETS (MEM-OPTIMIZED)
 # ============================================================
 
 import pandas as pd
 import time
 import sys
 import os
+import gc
 from binance import ThreadedWebsocketManager
 from binance.client import Client
 
@@ -34,7 +35,6 @@ class BinanceDynamicWSClient:
         if PROXY_CONFIG:
             proxy_url = PROXY_CONFIG.get('https') or PROXY_CONFIG.get('http')
             if proxy_url:
-                # Inyectar al entorno para que Futures API no lo esquive
                 os.environ['HTTP_PROXY'] = proxy_url
                 os.environ['HTTPS_PROXY'] = proxy_url
                 
@@ -122,12 +122,27 @@ class BinanceDynamicWSClient:
                         df.iat[-1, df.columns.get_loc(col)] = nueva_vela[col]
                 else:
                     df = pd.concat([df, pd.DataFrame([nueva_vela])], ignore_index=True)
-                    if len(df) > 300:
-                        df = df.iloc[-300:].reset_index(drop=True)
+                    # 🧹 MANTENER SOLO ÚLTIMAS 100 VELAS (En lugar de 300 para ahorrar RAM)
+                    if len(df) > 100:
+                        df = df.iloc[-100:].reset_index(drop=True)
                 self.velas_memoria[symbol] = df
 
     def actualizar_conector_websocket(self, simbolos):
-        """Abre streaming WebSocket solo para las monedas que están explotando"""
+        """Abre y reinicia streaming WebSocket garantizando purga de monedas obsoletas"""
+        # Asegurar BTCUSDT para el filtro de mercado
+        simbolos_actuales = set(simbolos)
+        simbolos_actuales.add('BTCUSDT')
+
+        # 🧹 1. PURGA DE MEMORIA: Eliminar monedas viejas que ya no están en el Top
+        monedas_a_remover = self.sockets_activos - simbolos_actuales
+        if monedas_a_remover:
+            print(f"🧹 Purgando {len(monedas_a_remover)} monedas fuera de rango de la RAM...")
+            for symbol in monedas_a_remover:
+                self.velas_memoria.pop(symbol, None)
+                self.sockets_activos.discard(symbol)
+            gc.collect()
+
+        # 2. Inicializar o reiniciar ThreadedWebsocketManager si creció mucho
         if self.twm is None:
             self.twm = ThreadedWebsocketManager(
                 api_key=BINANCE_API_KEY,
@@ -136,26 +151,32 @@ class BinanceDynamicWSClient:
             )
             self.twm.start()
 
-        for symbol in simbolos:
+        # 3. Conectar solo las monedas nuevas
+        for symbol in simbolos_actuales:
             if symbol not in self.sockets_activos:
-                self.velas_memoria[symbol] = self._cargar_historial_inicial(symbol)
+                self.velas_memoria[symbol] = self._cargar_historial_inicial(symbol, limit=100)
                 
-                # ✅ PAUSA DE RITMO: Evita ráfagas demasiado rápidas al servidor
-                time.sleep(0.35)
+                time.sleep(0.15)
                 
-                self.twm.start_kline_futures_socket(
-                    callback=self._procesar_mensaje_kline,
-                    symbol=symbol,
-                    interval=TIMEFRAME
-                )
-                self.sockets_activos.add(symbol)
+                try:
+                    self.twm.start_kline_futures_socket(
+                        callback=self._procesar_mensaje_kline,
+                        symbol=symbol,
+                        interval=TIMEFRAME
+                    )
+                    self.sockets_activos.add(symbol)
+                except Exception as e_ws:
+                    print(f"⚠️ Error conectando socket para {symbol}: {e_ws}")
 
     def obtener_velas(self, symbol):
         return self.velas_memoria.get(symbol, pd.DataFrame()).copy()
 
     def detener(self):
         if self.twm:
-            self.twm.stop()
+            try:
+                self.twm.stop()
+            except Exception:
+                pass
             print("🛑 WebSockets detenidos.")
 
 
