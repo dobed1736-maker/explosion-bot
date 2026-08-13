@@ -6,7 +6,7 @@
 import sys
 import os
 import time
-import math
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -24,72 +24,59 @@ class OrderManager:
         self.client = getattr(self.client_wrapper, 'client_rest', getattr(self.client_wrapper, 'client', None))
 
     def _obtener_precisiones(self, symbol_info):
-        """Extrae la precisión requerida para la cantidad (stepSize) y el precio (tickSize)"""
-        step_size = 0.001
-        tick_size = 0.01
-        
+        """Extrae la precisión exacta para la cantidad (stepSize) y el precio (tickSize) usando Decimal."""
+        step_size = Decimal('0.001')
+        tick_size = Decimal('0.01')
+        min_qty = Decimal('0.001')
+
         if symbol_info:
             for f in symbol_info.get('filters', []):
                 if f['filterType'] == 'LOT_SIZE':
-                    step_size = float(f['stepSize'])
+                    step_size = Decimal(str(f['stepSize']))
+                    min_qty = Decimal(str(f['minQty']))
                 elif f['filterType'] == 'PRICE_FILTER':
-                    tick_size = float(f['tickSize'])
+                    tick_size = Decimal(str(f['tickSize']))
 
-        def contar_decimales(valor):
-            s = f"{valor:.10f}".rstrip('0')
-            if '.' in s:
-                partes = s.split('.')
-                return len(partes[1]) if len(partes) > 1 else 0
-            return 0
+        return tick_size, step_size, min_qty
 
-        prec_qty = contar_decimales(step_size)
-        prec_price = contar_decimales(tick_size)
+    def _formatear_precio(self, precio, tick_size):
+        """Formatea el precio como un múltiplo exacto de tick_size sin errores de coma flotante."""
+        precio_dec = Decimal(str(precio))
+        # Redondeo exacto al tick_size más cercano
+        precio_ajustado = (precio_dec / tick_size).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * tick_size
+        return f"{precio_ajustado:f}"
 
-        return prec_qty, prec_price, tick_size, step_size
-
-    def _formatear_precio(self, precio, tick_size, prec_price):
-        """Formatea el precio como un múltiplo exacto de tick_size con los decimales requeridos"""
-        if tick_size > 0:
-            inv = 1.0 / tick_size
-            precio_ajustado = math.floor(float(precio) * inv + 0.5) / inv
-        else:
-            precio_ajustado = float(precio)
+    def _formatear_cantidad(self, cantidad, step_size, min_qty):
+        """Formatea la cantidad como un múltiplo exacto de step_size."""
+        cant_dec = Decimal(str(cantidad))
+        # Redondeo hacia abajo exacto según step_size
+        cant_ajustada = (cant_dec / step_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * step_size
         
-        if prec_price == 0:
-            return str(int(precio_ajustado))
-        return f"{precio_ajustado:.{prec_price}f}"
-
-    def _formatear_cantidad(self, cantidad, step_size, prec_qty):
-        """Formatea la cantidad como un múltiplo exacto de step_size"""
-        if step_size > 0:
-            inv = 1.0 / step_size
-            cant_ajustada = math.floor(float(cantidad) * inv) / inv
-        else:
-            cant_ajustada = float(cantidad)
+        if cant_ajustada < min_qty:
+            cant_ajustada = min_qty
             
-        if prec_qty == 0:
-            return str(int(cant_ajustada))
-        return f"{cant_ajustada:.{prec_qty}f}"
+        return f"{cant_ajustada:f}"
 
     def _colocar_orden_proteccion(self, symbol, order_type, trigger_price_str, quantity_str, max_retries=3):
         """
-        Intenta colocar orden de protección (SL o TP) limpia y sin errores de serialización JSON.
+        Intenta colocar orden de protección (SL o TP) utilizando closePosition='true'.
+        Si falla, realiza fallback enviando la cantidad explícita con reduceOnly.
         """
         for intento in range(1, max_retries + 1):
             try:
-                # Método 1: futures_create_order estándar con closePosition booleano
+                # Método 1: Cierre total explícito con string 'true'
                 res = self.client.futures_create_order(
                     symbol=symbol,
                     side='SELL',
                     type=order_type,
                     stopPrice=trigger_price_str,
-                    closePosition=True,
+                    closePosition='true',
                     workingType='MARK_PRICE'
                 )
                 return True, res
             except Exception as e1:
                 try:
-                    # Método 2: Fallback utilizando cantidad explícita y reduceOnly si closePosition falla
+                    # Método 2: Fallback con cantidad exacta y reduceOnly=True (booleano)
                     res = self.client.futures_create_order(
                         symbol=symbol,
                         side='SELL',
@@ -102,7 +89,7 @@ class OrderManager:
                     return True, res
                 except Exception as e2:
                     print(f"    └─ ⚠️ [INTENTO {intento}/{max_retries}] Error enviando {order_type} en {symbol}: {e2}")
-                    time.sleep(1.5)
+                    time.sleep(1.0)
 
         return False, None
 
@@ -129,19 +116,19 @@ class OrderManager:
         """
         try:
             print(f"\n🚀 [ORDER MANAGER] Iniciando orden LONG para {symbol}...")
-            
+
             if not self.client:
                 print("❌ Cliente Binance REST no disponible.")
                 return None
 
-            # 1. Configurar Apalancamiento (5x)
+            # 1. Configurar Apalancamiento
             try:
                 self.client.futures_change_leverage(symbol=symbol, leverage=apalancamiento)
                 print(f"    └─ Apalancamiento configurado: {apalancamiento}x")
             except Exception as e:
                 print(f"    └─ ⚠️ No se pudo cambiar apalancamiento: {e}")
 
-            # 2. Configurar Margen Aislado (ISOLATED)
+            # 2. Configurar Margen Aislado
             try:
                 self.client.futures_change_margin_type(symbol=symbol, marginType='ISOLATED')
                 print("    └─ Tipo de margen: ISOLATED")
@@ -151,21 +138,21 @@ class OrderManager:
             # 3. Obtener precisión exacta y filtros
             info = self.client.futures_exchange_info()
             symbol_info = next((item for item in info.get('symbols', []) if item['symbol'] == symbol), None)
-            
+
             if not symbol_info:
                 print(f"⚠️ {symbol} no fue encontrado en el exchange_info de Binance Futuros.")
                 return None
 
-            prec_qty, prec_price, tick_size, step_size = self._obtener_precisiones(symbol_info)
+            tick_size, step_size, min_qty = self._obtener_precisiones(symbol_info)
 
             # 4. Calcular cantidad
             notional_total = margen_usdt * apalancamiento
             precio_ref = float(self.client.futures_symbol_ticker(symbol=symbol)['price'])
             raw_quantity = notional_total / precio_ref
 
-            quantity_str = self._formatear_cantidad(raw_quantity, step_size, prec_qty)
-            sl_price_str = self._formatear_precio(stop_loss, tick_size, prec_price)
-            tp_price_str = self._formatear_precio(take_profit, tick_size, prec_price)
+            quantity_str = self._formatear_cantidad(raw_quantity, step_size, min_qty)
+            sl_price_str = self._formatear_precio(stop_loss, tick_size)
+            tp_price_str = self._formatear_precio(take_profit, tick_size)
 
             print(f"    └─ Entrada: {quantity_str} {symbol} (~${notional_total} USDT nocional)")
 
@@ -178,7 +165,7 @@ class OrderManager:
             )
             print(f"✅ ¡ORDEN EJECUTADA EN BINANCE! ID: {order.get('orderId')}")
 
-            # 6. Colocar Stop Loss con Blindaje (Reintentos + Fallback con cantidad)
+            # 6. Colocar Stop Loss con Blindaje
             sl_exitoso, _ = self._colocar_orden_proteccion(
                 symbol=symbol,
                 order_type='STOP_MARKET',
@@ -190,7 +177,6 @@ class OrderManager:
             if sl_exitoso:
                 print(f"    └─ 🛑 Stop Loss fijado en: ${sl_price_str}")
             else:
-                # SI EL SL FALLA 3 VECES, ABORTA LA POSICIÓN
                 self._aborto_emergencia(symbol, quantity_str)
                 return None
 
