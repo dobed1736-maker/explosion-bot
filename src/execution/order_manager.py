@@ -73,26 +73,68 @@ class OrderManager:
     return f'{cant_ajustada:f}'
 
   def _colocar_orden_proteccion(
-      self, symbol, order_type, trigger_price_str, quantity_str, max_retries=3
-  ):
-    """Intenta colocar orden de protección (SL o TP) utilizando fallbacks limpios
+        self, symbol, order_type, trigger_price_str, quantity_str, max_retries=3
+    ):
+      """Intenta colocar orden de protección (SL o TP).
 
-    compatibles con las distintas versiones de la API de Binance Futuros.
-    """
-    for intento in range(1, max_retries + 1):
-      # 1. Método Estándar Recomendado por Binance: futures_create_order con closePosition
-      try:
-        res = self.client.futures_create_order(
-            symbol=symbol,
-            side='SELL',
-            type=order_type,  # 'STOP_MARKET' o 'TAKE_PROFIT_MARKET'
-            stopPrice=trigger_price_str,
-            closePosition='true',
-            workingType='MARK_PRICE',
-        )
-        return True, res
-      except Exception as e1:
-        # 2. Método Alternativo Estándar: pasando cantidad explícita y reduceOnly
+      Alineado con la nueva política de Binance Futuros (Algo Order API en 1er
+      lugar).
+      """
+      # Mapeo de tipos según la especificación de Binance Algo Orders API
+      # Requiere 'STOP_LOSS' o 'TAKE_PROFIT'
+      algo_type = (
+          'STOP_LOSS' if order_type == 'STOP_MARKET' else 'TAKE_PROFIT'
+      )
+
+      for intento in range(1, max_retries + 1):
+        # -------------------------------------------------------------------
+        # INTENTO 1: Algo Order API (Resuelve de raíz el error API -4120)
+        # -------------------------------------------------------------------
+        try:
+          if hasattr(self.client, 'futures_place_algo_order'):
+            res = self.client.futures_place_algo_order(
+                symbol=symbol,
+                side='SELL',
+                type=algo_type,
+                triggerPrice=trigger_price_str,
+                closePosition='true',
+                workingType='MARK_PRICE',
+            )
+            return True, res
+
+          elif hasattr(self.client, 'futures_create_algo_order'):
+            res = self.client.futures_create_algo_order(
+                symbol=symbol,
+                side='SELL',
+                type=algo_type,
+                triggerPrice=trigger_price_str,
+                closePosition='true',
+                workingType='MARK_PRICE',
+            )
+            return True, res
+        except Exception as e_algo:
+          # Si falla la Algo API, registramos el error interno pero no abortamos el bucle
+          pass
+
+        # -------------------------------------------------------------------
+        # INTENTO 2: Endpoint Estándar (futures_create_order con closePosition)
+        # -------------------------------------------------------------------
+        try:
+          res = self.client.futures_create_order(
+              symbol=symbol,
+              side='SELL',
+              type=order_type,  # STOP_MARKET o TAKE_PROFIT_MARKET
+              stopPrice=trigger_price_str,
+              closePosition='true',
+              workingType='MARK_PRICE',
+          )
+          return True, res
+        except Exception as e_std:
+          pass
+
+        # -------------------------------------------------------------------
+        # INTENTO 3: Endpoint Estándar Fallback (con cantidad explícita y reduceOnly)
+        # -------------------------------------------------------------------
         try:
           res = self.client.futures_create_order(
               symbol=symbol,
@@ -104,32 +146,17 @@ class OrderManager:
               workingType='MARK_PRICE',
           )
           return True, res
-        except Exception as e2:
-          # 3. Método Fallback: Algo Orders API (para versiones recientes de python-binance)
-          try:
-            algo_type = (
-                'STOP_LOSS'
-                if order_type == 'STOP_MARKET'
-                else 'TAKE_PROFIT'
-            )
-            res = self.client.futures_place_algo_order(
-                symbol=symbol,
-                side='SELL',
-                type=algo_type,
-                triggerPrice=trigger_price_str,
-                closePosition='true',
-                workingType='MARK_PRICE',
-            )
-            return True, res
-          except Exception as e_algo:
-            print(
-                f'    └─ ⚠️ [INTENTO {intento}/{max_retries}] Error enviando'
-                f' {order_type} en {symbol}. STD Error: {e2} | ALGO Error:'
-                f' {e_algo}'
-            )
-            time.sleep(1.0)
+        except Exception as e_fallback:
+          print(
+              f'    └─ ⚠️ [INTENTO {intento}/{max_retries}] Fallo'
+              f' enviando {order_type} ({algo_type}) en {symbol}: {e_fallback}'
+          )
 
-    return False, None
+        time.sleep(1.0)
+
+      return False, None
+
+ 
 
   def _aborto_emergencia(self, symbol, quantity_str):
     """Cierra la posición inmediatamente a mercado si el SL no pudo colocarse."""
