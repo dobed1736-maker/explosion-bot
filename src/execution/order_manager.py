@@ -72,25 +72,26 @@ class OrderManager:
     return f'{cant_ajustada:f}'
 
   def _colocar_orden_proteccion(
-    self,
-    symbol,
-    order_type,
-    trigger_price_str,
-    quantity_str,
-    side='SELL',
-    max_retries=3,
-):
+      self,
+      symbol,
+      order_type,
+      trigger_price_str,
+      quantity_str,
+      side='SELL',
+      max_retries=3,
+  ):
     """Intenta colocar orden de protección (SL o TP).
 
     Soporta de forma nativa la diferencia entre Testnet y Producción
-    resolviendo el error API -4120 sin cruzar tipos de órdenes.
+    resolviendo el error API -4120 sin cruzar tipos de órdenes ni fallos de
+    firma.
     """
     # Detectar entorno Testnet
     is_testnet = False
     if hasattr(self.client, 'FUTURES_TESTNET_URL') or getattr(
         self.client, 'testnet', False
     ):
-        is_testnet = True
+      is_testnet = True
 
     # Mapeo de tipo para Algo Orders API
     algo_type = (
@@ -100,110 +101,112 @@ class OrderManager:
     )
 
     for intento in range(1, max_retries + 1):
-        # -------------------------------------------------------------------
-        # CASO A: TESTNET (Endpoint tradicional /fapi/v1/order)
-        # -------------------------------------------------------------------
-        if is_testnet:
-            # Intento A1: closePosition='true'
-            try:
-                res = self.client.futures_create_order(
-                    symbol=symbol,
-                    side=side,
-                    type=algo_type,
-                    stopPrice=trigger_price_str,
-                    closePosition='true',
-                    workingType='MARK_PRICE',
-                )
-                return True, res
-            except Exception:
-                pass
+      # -------------------------------------------------------------------
+      # CASO A: TESTNET (Endpoint tradicional /fapi/v1/order)
+      # -------------------------------------------------------------------
+      if is_testnet:
+        # Intento A1: closePosition='true'
+        try:
+          res = self.client.futures_create_order(
+              symbol=symbol,
+              side=side,
+              type=algo_type,
+              stopPrice=trigger_price_str,
+              closePosition='true',
+              workingType='MARK_PRICE',
+          )
+          return True, res
+        except Exception:
+          pass
 
-            # Intento A2: Cantidad explícita + reduceOnly
-            try:
-                res = self.client.futures_create_order(
-                    symbol=symbol,
-                    side=side,
-                    type=algo_type,
-                    stopPrice=trigger_price_str,
-                    quantity=quantity_str,
-                    reduceOnly=True,
-                    workingType='MARK_PRICE',
-                )
-                return True, res
-            except Exception as e_testnet:
-                print(
-                    f'    └─ ⚠️ [TESTNET Intento {intento}/{max_retries}] Error en'
-                    f' {symbol}: {e_testnet}'
-                )
+        # Intento A2: Cantidad explícita + reduceOnly (vía SDK usa booleano True)
+        try:
+          res = self.client.futures_create_order(
+              symbol=symbol,
+              side=side,
+              type=algo_type,
+              stopPrice=trigger_price_str,
+              quantity=quantity_str,
+              reduceOnly=True,
+              workingType='MARK_PRICE',
+          )
+          return True, res
+        except Exception as e_testnet:
+          print(
+              f'    └─ ⚠️ [TESTNET Intento {intento}/{max_retries}] Error en'
+              f' {symbol}: {e_testnet}'
+          )
 
-        # -------------------------------------------------------------------
-        # CASO B: PRODUCCIÓN (Algo Order API /fapi/v1/algo/order)
-        # -------------------------------------------------------------------
-        else:
-            # Intento B1: SDK Algo Order API nativo
-            try:
-                if hasattr(self.client, 'futures_place_algo_order'):
-                    res = self.client.futures_place_algo_order(
-                        symbol=symbol,
-                        side=side,
-                        type=algo_type,
-                        triggerPrice=trigger_price_str,
-                        closePosition='true',
-                        workingType='MARK_PRICE',
-                    )
-                    return True, res
-            except Exception:
-                pass
+      # -------------------------------------------------------------------
+      # CASO B: PRODUCCIÓN (Algo Order API /fapi/v1/algo/order)
+      # -------------------------------------------------------------------
+      else:
+        # Intento B1: SDK Algo Order API nativo
+        try:
+          if hasattr(self.client, 'futures_place_algo_order'):
+            res = self.client.futures_place_algo_order(
+                symbol=symbol,
+                side=side,
+                type=algo_type,
+                triggerPrice=trigger_price_str,
+                closePosition='true',
+                workingType='MARK_PRICE',
+            )
+            return True, res
+        except Exception:
+          pass
 
-            # Intento B2: POST HTTP directo al endpoint Algo (closePosition)
-            try:
-                params = {
-                    'symbol': symbol,
-                    'side': side,
-                    'type': algo_type,
-                    'triggerPrice': trigger_price_str,
-                    'closePosition': 'true',
-                    'workingType': 'MARK_PRICE',
-                }
-                if hasattr(self.client, '_request_futures_api'):
-                    res = self.client._request_futures_api(
-                        'post', 'algo/order', signed=True, data=params
-                    )
-                    return True, res
-                elif hasattr(self.client, '_request_api'):
-                    res = self.client._request_api(
-                        'post', 'fapi/v1/algo/order', signed=True, data=params
-                    )
-                    return True, res
-            except Exception:
-                pass
+        # Intento B2: POST HTTP directo al endpoint Algo (closePosition)
+        try:
+          params = {
+              'symbol': symbol,
+              'side': side,
+              'type': algo_type,
+              'triggerPrice': trigger_price_str,
+              'closePosition': 'true',
+              'workingType': 'MARK_PRICE',
+          }
+          if hasattr(self.client, '_request_futures_api'):
+            res = self.client._request_futures_api(
+                'post', 'algo/order', signed=True, data=params
+            )
+            return True, res
+          elif hasattr(self.client, '_request_api'):
+            res = self.client._request_api(
+                'post', 'fapi/v1/algo/order', signed=True, data=params
+            )
+            return True, res
+        except Exception:
+          pass
 
-            # Intento B3: Fallback con cantidad explícita en Algo API
-            try:
-                params_fallback = {
-                    'symbol': symbol,
-                    'side': side,
-                    'type': algo_type,
-                    'triggerPrice': trigger_price_str,
-                    'quantity': quantity_str,
-                    'reduceOnly': True,  # Se pasa como booleano nativo para evitar casteos erróneos
-                    'workingType': 'MARK_PRICE',
-                }
-                if hasattr(self.client, '_request_futures_api'):
-                    res = self.client._request_futures_api(
-                        'post', 'algo/order', signed=True, data=params_fallback
-                    )
-                    return True, res
-            except Exception as e_prod:
-                print(
-                    f'    └─ ⚠️ [PROD Intento {intento}/{max_retries}] Error en Algo'
-                    f' API {symbol}: {e_prod}'
-                )
+        # Intento B3: Fallback con cantidad explícita en Algo API
+        try:
+          # IMPORTANTE: En payload HTTP raw para Binance, usar string 'true'
+          params_fallback = {
+              'symbol': symbol,
+              'side': side,
+              'type': algo_type,
+              'triggerPrice': trigger_price_str,
+              'quantity': quantity_str,
+              'reduceOnly': 'true',
+              'workingType': 'MARK_PRICE',
+          }
+          if hasattr(self.client, '_request_futures_api'):
+            res = self.client._request_futures_api(
+                'post', 'algo/order', signed=True, data=params_fallback
+            )
+            return True, res
+        except Exception as e_prod:
+          print(
+              f'    └─ ⚠️ [PROD Intento {intento}/{max_retries}] Error en Algo'
+              f' API {symbol}: {e_prod}'
+          )
 
-        # Espera incremental entre reintentos para dar margen a la red
-        time.sleep(1.0 * intento)
+      # Retardo progresivo entre intentos para no saturar la API
+      time.sleep(1.0 * intento)
 
     return False, None
+
   def _aborto_emergencia(self, symbol, quantity_str):
     """Cierra la posición inmediatamente a mercado si el SL no pudo colocarse."""
     print(
@@ -241,7 +244,8 @@ class OrderManager:
   ):
     """Ejecuta una orden de COMPRA (LONG) a mercado y configura SL / TP blindados.
 
-    Retorna True si se ejecutó y protegió correctamente, False en caso contrario.
+    Retorna True si se ejecutó y protegió correctamente, False en caso
+    contrario.
     """
     try:
       print(f'\n🚀 [ORDER MANAGER] Iniciando orden LONG para {symbol}...')
