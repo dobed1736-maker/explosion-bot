@@ -128,7 +128,7 @@ class BotMomentumDinamico:
 
     def monitorear_posiciones_abiertas(self):
         """
-        Consulta en PostgreSQL las operaciones en estado 'EJECUTADA' o 'PENDIENTE' con orden activa.
+        Consulta en PostgreSQL las operaciones en estado 'EJECUTADA' o 'PENDIENTE_CERRAR'.
         Garantiza cierre de conexión BD en todo escenario.
         """
         if not get_connection or not actualizar_estado_senal:
@@ -170,6 +170,13 @@ class BotMomentumDinamico:
                         if trades:
                             pnl_acumulado = sum(float(t.get('realizedPnl', 0)) for t in trades)
                             ultimo_precio_salida = float(trades[-1].get('price', precio_entrada))
+                        else:
+                            # Fallback para Testnet cuando futures_account_trades tiene lag
+                            try:
+                                ticker = self.ordenes.client.futures_symbol_ticker(symbol=symbol)
+                                ultimo_precio_salida = float(ticker.get('price', precio_entrada))
+                            except Exception:
+                                pass
 
                         nuevo_estado = "GANADA" if pnl_acumulado >= 0 else "PERDIDA"
 
@@ -263,41 +270,52 @@ class BotMomentumDinamico:
                 tp3 = senal.get('take_profit_3', 0)
                 detalles = senal.get('detalles', {})
 
-                # Extraer probabilidades individuales para guardar en BD
+                # Extraer probabilidades individuales
                 prob_xgb = float(detalles.get('XGBoost', '0').replace('%', '')) / 100 if 'XGBoost' in detalles else 0
                 prob_lstm = float(detalles.get('LSTM', '0').replace('%', '')) / 100 if 'LSTM' in detalles else 0
                 prob_stats = float(detalles.get('Régimen', '0').split('%')[0]) / 100 if 'Régimen' in detalles else 0
 
                 es_compra = senal and senal.get('comprar', False)
-                estado_inicial = 'EJECUTADA' if es_compra else 'PENDIENTE'
-
-                # 💾 1. Guardar en PostgreSQL
-                id_db = None
-                if guardar_senal:
-                    try:
-                        id_db = guardar_senal(
-                            symbol=symbol,
-                            precio=precio_in,
-                            score=prob,
-                            prob_xgb=prob_xgb,
-                            prob_lstm=prob_lstm,
-                            prob_stats=prob_stats,
-                            sl=sl,
-                            tp1=tp1,
-                            tp2=tp2,
-                            estado=estado_inicial
-                        )
-                    except Exception as e_db:
-                        print(f"⚠️ Error al guardar en PostgreSQL: {e_db}")
-
-                # 🚀 2. Si supera el umbral, ejecutar compra y notificar
+                
                 if es_compra:
-                    msg_exito = f"🚀 ¡COMPRA EJECUTADA EN {symbol}!\nPrecio: ${precio_in} | Probabilidad: {prob*100:.1f}%\nSL: ${sl} | TP1: ${tp1}"
+                    # 🚀 1. PRIMERO: Ejecutar la orden en Binance
+                    msg_exito = f"🚀 ¡COMPRA SOLICITADA EN {symbol}!\nPrecio: ${precio_in} | Probabilidad: {prob*100:.1f}%\nSL: ${sl} | TP1: ${tp1}"
                     print(f"\n{msg_exito}")
                     
                     log_senal(symbol, "COMPRA", prob, precio_in)
 
-                    if enviar_señal_telegram:
+                    res_ejecucion = self.ordenes.ejecutar_orden_compra(
+                        symbol=symbol,
+                        precio_entrada=precio_in,
+                        stop_loss=sl,
+                        take_profit=tp1
+                    )
+
+                    # Evaluar si la orden realmente se envió con éxito
+                    exito_orden = res_ejecucion if isinstance(res_ejecucion, bool) else True
+                    estado_inicial = 'EJECUTADA' if exito_orden else 'FALLIDA'
+
+                    # 💾 2. SEGUNDO: Guardar en PostgreSQL el estado REAL
+                    id_db = None
+                    if guardar_senal:
+                        try:
+                            id_db = guardar_senal(
+                                symbol=symbol,
+                                precio=precio_in,
+                                score=prob,
+                                prob_xgb=prob_xgb,
+                                prob_lstm=prob_lstm,
+                                prob_stats=prob_stats,
+                                sl=sl,
+                                tp1=tp1,
+                                tp2=tp2,
+                                estado=estado_inicial
+                            )
+                        except Exception as e_db:
+                            print(f"⚠️ Error al guardar en PostgreSQL: {e_db}")
+
+                    # 🔔 3. Notificar a Telegram si la orden fue válida
+                    if enviar_señal_telegram and exito_orden:
                         try:
                             enviar_señal_telegram(
                                 symbol=symbol,
@@ -311,13 +329,6 @@ class BotMomentumDinamico:
                             )
                         except Exception as e_tg:
                             print(f"⚠️ No se pudo enviar notificación a Telegram: {e_tg}")
-
-                    self.ordenes.ejecutar_orden_compra(
-                        symbol=symbol,
-                        precio_entrada=precio_in,
-                        stop_loss=sl,
-                        take_profit=tp1
-                    )
                 else:
                     print(f"⏸️ {symbol}: {mensaje}")
 
